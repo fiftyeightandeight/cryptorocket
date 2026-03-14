@@ -18,6 +18,7 @@ STRATEGIES = {
     "intraday-mr-us": "strategies.examples.intraday:IntradayMeanReversionUS",
     "intraday-momentum-asia": "strategies.examples.intraday:IntradayMomentumAsia",
     "intraday-momentum-eu": "strategies.examples.intraday:IntradayMomentumEurope",
+    "liquidation-cascade": "strategies.examples.liquidation_cascade:LiquidationCascadeMomentum",
 }
 
 
