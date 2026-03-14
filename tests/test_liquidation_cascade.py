@@ -53,8 +53,6 @@ class TestLiquidationCascadeSignals:
         prices = _make_hourly_prices()
         signals = strategy.prices_to_signals(prices)
 
-        # With no funding data, _funding_extreme returns zeros,
-        # so the combined condition can never be satisfied
         assert (signals == 0).all().all()
 
     def test_hold_signals_forward_fills(self):
@@ -118,6 +116,11 @@ class TestFundingExtreme:
         unique_vals = set(result.values.flatten())
         assert unique_vals.issubset({-1.0, 0.0, 1.0})
 
+    def test_asymmetric_windows(self):
+        """Verify short and long windows are different to avoid self-reference."""
+        strategy = LiquidationCascadeMomentum()
+        assert strategy.FUNDING_SHORT_WINDOW < strategy.FUNDING_LONG_WINDOW
+
 
 class TestWeightsAndPipeline:
     def test_weights_equal_weight_active(self):
@@ -135,7 +138,7 @@ class TestWeightsAndPipeline:
         assert weights.iloc[0]["BTC"] == pytest.approx(0.5)
         assert weights.iloc[0]["ETH"] == pytest.approx(0.5)
 
-        # Row 1: only BTC active → weight 1.0 (or -1.0)
+        # Row 1: only BTC active → weight -1.0
         assert weights.iloc[1]["BTC"] == pytest.approx(-1.0)
         assert weights.iloc[1]["ETH"] == pytest.approx(0.0)
 
@@ -169,3 +172,15 @@ class TestWeightsAndPipeline:
         assert gross.shape == signals.shape
         # With no funding data, all signals are zero → zero returns
         assert (gross == 0).all().all()
+
+    def test_channel_breakout_requires_lookback(self):
+        """Verify no signals fire during the warm-up period when
+        min_periods hasn't been met."""
+        strategy = LiquidationCascadeMomentum()
+        # Use very short data — shorter than CHANNEL_LOOKBACK
+        prices = _make_hourly_prices(n_hours=30)
+        signals = strategy.prices_to_signals(prices)
+
+        # With 48h channel lookback and 30h of data, breakout
+        # conditions can never be met → no signals
+        assert (signals == 0).all().all()

@@ -13,12 +13,13 @@ class LiquidationCascadeMomentum(CryptoMoonshot):
     (standing in for historical OI which isn't yet in the pipeline).
 
     Signal logic:
-        1. Funding rate extreme: rolling cumulative funding exceeds a
-           z-score threshold, indicating crowded positioning on one side.
-        2. Price breakout: price breaks beyond the recent ATR-scaled range
-           in the direction AGAINST the crowded side (triggering liquidations).
-        3. Volume confirmation: volume spikes above its rolling mean,
-           consistent with forced-liquidation flow.
+        1. Funding rate extreme: short-window cumulative funding is
+           unusually high vs its long-window distribution, indicating
+           crowded positioning on one side.
+        2. Price breakout: price breaks a Donchian channel (rolling
+           high/low), where liquidation levels tend to cluster.
+        3. Volume confirmation: short-term volume surges above the
+           longer-term baseline, consistent with forced-liquidation flow.
 
     When all three conditions align, the strategy enters in the cascade
     direction (contra to the crowded side) and holds for HOLD_BARS.
@@ -37,20 +38,21 @@ class LiquidationCascadeMomentum(CryptoMoonshot):
 
     # --- Tunable parameters ---
 
-    # Funding rate analysis (8h rates accumulated over a rolling window)
-    FUNDING_WINDOW = 72        # hours (~3 days) for rolling cumulative funding
-    FUNDING_Z_THRESHOLD = 1.5  # z-score of cumulative funding to flag "extreme"
+    # Funding rate analysis — asymmetric windows to avoid self-reference
+    FUNDING_SHORT_WINDOW = 24   # hours: "current" cumulative funding
+    FUNDING_LONG_WINDOW = 168   # hours (~1 week): baseline distribution
+    FUNDING_Z_THRESHOLD = 2.0   # z-score threshold for extreme
 
-    # Price breakout detection
-    BREAKOUT_LOOKBACK = 24     # hours for ATR and range calculation
-    BREAKOUT_ATR_MULT = 2.0    # ATR multiples beyond rolling mid for breakout
+    # Price breakout — Donchian channel
+    CHANNEL_LOOKBACK = 48       # hours for channel high/low
 
-    # Volume confirmation
-    VOLUME_LOOKBACK = 48       # hours for rolling volume mean
-    VOLUME_SPIKE_MULT = 2.5    # multiple of rolling mean to qualify as spike
+    # Volume confirmation — acceleration (short vs long average)
+    VOLUME_SHORT_WINDOW = 4     # hours: recent volume burst
+    VOLUME_LONG_WINDOW = 72     # hours: baseline volume
+    VOLUME_SPIKE_MULT = 3.0     # short/long ratio to qualify as spike
 
     # Position holding
-    HOLD_BARS = 6              # bars to hold after a cascade signal fires
+    HOLD_BARS = 4               # bars to hold after a cascade signal fires
 
     def prices_to_signals(self, prices: pd.DataFrame) -> pd.DataFrame:
         closes = prices["Close"]
@@ -64,16 +66,26 @@ class LiquidationCascadeMomentum(CryptoMoonshot):
         # --- 1. Funding rate extreme (proxy for crowded leverage) ---
         funding_extreme = self._funding_extreme(closes)
 
-        # --- 2. Price breakout detection ---
-        atr = (highs - lows).rolling(self.BREAKOUT_LOOKBACK, min_periods=1).mean()
-        rolling_mid = closes.rolling(self.BREAKOUT_LOOKBACK, min_periods=1).mean()
+        # --- 2. Donchian channel breakout ---
+        # Use shifted channel so current bar isn't included in its own range
+        upper_channel = highs.rolling(
+            self.CHANNEL_LOOKBACK, min_periods=self.CHANNEL_LOOKBACK
+        ).max().shift(1)
+        lower_channel = lows.rolling(
+            self.CHANNEL_LOOKBACK, min_periods=self.CHANNEL_LOOKBACK
+        ).min().shift(1)
 
-        breakout_up = closes > (rolling_mid + self.BREAKOUT_ATR_MULT * atr)
-        breakout_down = closes < (rolling_mid - self.BREAKOUT_ATR_MULT * atr)
+        breakout_up = closes > upper_channel
+        breakout_down = closes < lower_channel
 
-        # --- 3. Volume spike confirmation ---
-        vol_ma = volumes.rolling(self.VOLUME_LOOKBACK, min_periods=1).mean()
-        vol_spike = volumes > (vol_ma * self.VOLUME_SPIKE_MULT)
+        # --- 3. Volume acceleration ---
+        vol_short = volumes.rolling(
+            self.VOLUME_SHORT_WINDOW, min_periods=self.VOLUME_SHORT_WINDOW
+        ).mean()
+        vol_long = volumes.rolling(
+            self.VOLUME_LONG_WINDOW, min_periods=self.VOLUME_LONG_WINDOW
+        ).mean()
+        vol_spike = vol_short > (vol_long * self.VOLUME_SPIKE_MULT)
 
         # --- 4. Combine: cascade fires when all three align ---
         # Crowded longs (funding_extreme > 0) + price breaks DOWN + volume spike → SHORT
@@ -91,6 +103,10 @@ class LiquidationCascadeMomentum(CryptoMoonshot):
 
     def _funding_extreme(self, closes: pd.DataFrame) -> pd.DataFrame:
         """Compute a funding-extreme indicator aligned to the price index.
+
+        Uses asymmetric windows: a short window captures the "current"
+        cumulative funding, and a longer window provides the baseline
+        distribution for z-scoring.
 
         Returns a DataFrame of same shape as closes:
             +1 where cumulative funding is extremely positive (crowded longs)
@@ -123,22 +139,27 @@ class LiquidationCascadeMomentum(CryptoMoonshot):
         # Reindex funding to hourly, forward-filling the 8h snapshots
         funding = funding[common].reindex(closes.index, method="ffill")
 
-        # Rolling cumulative funding over the window
-        cum_funding = funding.rolling(self.FUNDING_WINDOW, min_periods=1).sum()
+        # Short-window cumulative funding (current state)
+        short_cum = funding.rolling(
+            self.FUNDING_SHORT_WINDOW, min_periods=self.FUNDING_SHORT_WINDOW
+        ).sum()
 
-        # Z-score the cumulative funding
-        cum_mean = cum_funding.rolling(self.FUNDING_WINDOW, min_periods=1).mean()
-        cum_std = cum_funding.rolling(self.FUNDING_WINDOW, min_periods=1).std()
-        cum_std = cum_std.replace(0, np.nan)
-        z = (cum_funding - cum_mean) / cum_std
+        # Long-window baseline statistics of the short cumulative
+        long_mean = short_cum.rolling(
+            self.FUNDING_LONG_WINDOW, min_periods=self.FUNDING_LONG_WINDOW
+        ).mean()
+        long_std = short_cum.rolling(
+            self.FUNDING_LONG_WINDOW, min_periods=self.FUNDING_LONG_WINDOW
+        ).std()
+        long_std = long_std.replace(0, np.nan)
 
-        result[common] = 0.0
-        result.loc[:, common] = result.loc[:, common].where(
-            ~(z > self.FUNDING_Z_THRESHOLD), 1.0
-        )
-        result.loc[:, common] = result.loc[:, common].where(
-            ~(z < -self.FUNDING_Z_THRESHOLD), -1.0
-        )
+        z = (short_cum - long_mean) / long_std
+
+        extreme = pd.DataFrame(0.0, index=closes.index, columns=common)
+        extreme[z > self.FUNDING_Z_THRESHOLD] = 1.0
+        extreme[z < -self.FUNDING_Z_THRESHOLD] = -1.0
+
+        result[common] = extreme
 
         return result
 
