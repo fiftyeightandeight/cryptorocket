@@ -192,18 +192,37 @@ class HyperliquidClient:
         start_time: datetime,
         end_time: datetime,
     ) -> list[dict]:
-        """Fetch funding rate history for a perp symbol."""
+        """Fetch funding rate history for a perp symbol with automatic pagination.
+
+        The API returns at most 500 records per request, so we page forward
+        by advancing start_time past the last returned timestamp.
+        """
         start_ms = int(start_time.timestamp() * 1000)
         end_ms = int(end_time.timestamp() * 1000)
-        raw = self._call(1, lambda: self.info.funding_history(symbol, start_ms, end_ms))
-        return [
-            {
-                "timestamp": datetime.fromtimestamp(r["time"] / 1000, tz=timezone.utc),
-                "rate": float(r["fundingRate"]),
-                "premium": float(r["premium"]),
-            }
-            for r in raw
-        ]
+        all_records = []
+        current_start = start_ms
+
+        while current_start < end_ms:
+            raw = self._call(
+                1,
+                lambda cs=current_start: self.info.funding_history(symbol, cs, end_ms),
+            )
+            if not raw:
+                break
+
+            for r in raw:
+                all_records.append({
+                    "timestamp": datetime.fromtimestamp(r["time"] / 1000, tz=timezone.utc),
+                    "rate": float(r["fundingRate"]),
+                    "premium": float(r["premium"]),
+                })
+
+            last_ts = raw[-1]["time"]
+            if last_ts <= current_start:
+                break
+            current_start = last_ts + 1
+
+        return all_records
 
     def get_l2_snapshot(self, symbol: str) -> dict:
         """Get L2 order book snapshot."""

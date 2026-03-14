@@ -22,7 +22,7 @@ class CryptoMomentum(CryptoMoonshot):
     COMMISSION_CLASS = HyperliquidPerpsCommission
 
     def prices_to_signals(self, prices: pd.DataFrame) -> pd.DataFrame:
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
         # Trailing return over LOOKBACK periods
         momentum = closes.pct_change(self.LOOKBACK)
         # Rank: lowest rank = strongest momentum
@@ -57,7 +57,7 @@ class CryptoMeanReversion(CryptoMoonshot):
     COMMISSION_CLASS = HyperliquidPerpsCommission
 
     def prices_to_signals(self, prices: pd.DataFrame) -> pd.DataFrame:
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
         rolling_mean = closes.rolling(self.LOOKBACK).mean()
         rolling_std = closes.rolling(self.LOOKBACK).std()
         z_score = (closes - rolling_mean) / rolling_std

@@ -101,7 +101,7 @@ class CryptoMoonshot:
 
         Default: close-to-close returns weighted by prior day's position.
         """
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
         pct_returns = closes.pct_change()
         gross_returns = positions.shift(1) * pct_returns
         return gross_returns.fillna(0)
@@ -220,7 +220,7 @@ class CryptoMoonshot:
 
         # 4. Apply commissions
         commission_model = self.COMMISSION_CLASS()
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
         commissions = commission_model.get_commissions(closes, position_changes)
 
         # 5. Net returns

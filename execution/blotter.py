@@ -37,7 +37,6 @@ class Blotter:
             [order_id, strategy, symbol, side, size, order_type, limit_price,
              datetime.now(timezone.utc)],
         )
-        conn.close()
         return order_id
 
     def record_fill(
@@ -97,7 +96,6 @@ class Blotter:
                     [strategy, symbol, signed_size, fill_price, now],
                 )
 
-        conn.close()
         logger.info(f"Fill: order={order_id} price={fill_price} size={fill_size} fee={fee}")
 
     def cancel_order(self, order_id: str):
@@ -107,7 +105,6 @@ class Blotter:
             "UPDATE orders SET status = 'cancelled' WHERE order_id = ?",
             [order_id],
         )
-        conn.close()
 
     def get_positions(self, strategy: Optional[str] = None) -> dict[str, float]:
         """Get current positions as dict of symbol -> size (signed)."""
@@ -121,7 +118,6 @@ class Blotter:
             rows = conn.execute(
                 "SELECT symbol, size FROM positions WHERE ABS(size) > 1e-10"
             ).fetchall()
-        conn.close()
         return {row[0]: row[1] for row in rows}
 
     def get_position_details(self, strategy: Optional[str] = None) -> pd.DataFrame:
@@ -136,7 +132,6 @@ class Blotter:
             df = conn.execute(
                 "SELECT * FROM positions WHERE ABS(size) > 1e-10"
             ).fetchdf()
-        conn.close()
         return df
 
     def get_order_history(
@@ -159,7 +154,6 @@ class Blotter:
         params.append(limit)
 
         df = conn.execute(query, params).fetchdf()
-        conn.close()
         return df
 
     def get_pnl(self, strategy: str, current_prices: dict[str, float]) -> dict:
@@ -185,8 +179,6 @@ class Blotter:
         for symbol, size, entry_price in positions:
             current_price = current_prices.get(symbol, entry_price)
             unrealized_pnl += size * (current_price - entry_price)
-
-        conn.close()
 
         return {
             "realized_pnl": realized_pnl,

@@ -14,7 +14,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 STRATEGIES = {
     "crypto-momentum": "strategies.examples.momentum:CryptoMomentum",
     "crypto-mean-reversion": "strategies.examples.momentum:CryptoMeanReversion",
-    "funding-carry": "strategies.examples.carry:FundingRateCarry",
     "intraday-momentum-us": "strategies.examples.intraday:IntradayMomentumUS",
     "intraday-mr-us": "strategies.examples.intraday:IntradayMeanReversionUS",
     "intraday-momentum-asia": "strategies.examples.intraday:IntradayMomentumAsia",

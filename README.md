@@ -66,7 +66,6 @@ HYPERLIQUID_TESTNET=true python -m scripts.run_live crypto-momentum
 |------|-------------|
 | `crypto-momentum` | Long top-N by 20d trailing return |
 | `crypto-mean-reversion` | Z-score mean reversion (long oversold, short overbought) |
-| `funding-carry` | Long negative funding, short positive funding |
 | `intraday-momentum-us` | Hourly momentum during US session (14-22 UTC) |
 | `intraday-mr-us` | Hourly mean reversion during US session |
 | `intraday-momentum-asia` | Hourly momentum during Asia session (00-08 UTC) |

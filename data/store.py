@@ -17,7 +17,6 @@ def get_available_symbols(
         "SELECT DISTINCT symbol FROM candles WHERE interval = ? ORDER BY symbol",
         [interval],
     ).fetchall()
-    conn.close()
     return [r[0] for r in rows]
 
 
@@ -65,10 +64,8 @@ def get_prices(
     query += " ORDER BY timestamp, symbol"
 
     df = conn.execute(query, params).fetchdf()
-    conn.close()
 
     if df.empty:
-        # Return empty DataFrame with correct structure
         idx = pd.DatetimeIndex([], name="Date")
         cols = pd.MultiIndex.from_product([fields, symbols], names=["Field", "Symbol"])
         return pd.DataFrame(index=idx, columns=cols)
@@ -131,7 +128,6 @@ def get_funding_rates(
     query += " ORDER BY timestamp, symbol"
 
     df = conn.execute(query, params).fetchdf()
-    conn.close()
 
     if df.empty:
         idx = pd.DatetimeIndex([], name="Date")

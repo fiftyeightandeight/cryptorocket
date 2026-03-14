@@ -27,7 +27,7 @@ class IntradayMomentumUS(CryptoMoonshot):
     COMMISSION_CLASS = HyperliquidPerpsCommission
 
     def prices_to_signals(self, prices: pd.DataFrame) -> pd.DataFrame:
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
 
         # Trailing return over LOOKBACK bars
         ret = closes.pct_change(self.LOOKBACK)
@@ -70,7 +70,7 @@ class IntradayMeanReversionUS(CryptoMoonshot):
     COMMISSION_CLASS = HyperliquidPerpsCommission
 
     def prices_to_signals(self, prices: pd.DataFrame) -> pd.DataFrame:
-        closes = prices.loc["Close"]
+        closes = prices["Close"]
 
         signals = pd.DataFrame(0.0, index=closes.index, columns=closes.columns)
 

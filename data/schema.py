@@ -1,3 +1,5 @@
+import threading
+
 import duckdb
 from pathlib import Path
 
@@ -62,13 +64,47 @@ CREATE TABLE IF NOT EXISTS positions (
 );
 """
 
+_pool: dict[str, duckdb.DuckDBPyConnection] = {}
+_pool_lock = threading.Lock()
+
 
 def get_connection(db_path: Path | str | None = None) -> duckdb.DuckDBPyConnection:
-    """Get a DuckDB connection, creating the database file if needed."""
+    """Get a DuckDB connection, reusing one per db_path within the same thread.
+
+    Callers that previously called conn.close() still work: a closed connection
+    is detected and replaced. For short-lived scripts this behaves identically
+    to the old per-call approach; for the live loop it avoids repeated open/close.
+    """
     path = Path(db_path) if db_path else DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = duckdb.connect(str(path))
-    return conn
+    key = f"{threading.current_thread().ident}:{path}"
+
+    with _pool_lock:
+        conn = _pool.get(key)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1")
+                return conn
+            except Exception:
+                _pool.pop(key, None)
+
+        conn = duckdb.connect(str(path))
+        _pool[key] = conn
+        return conn
+
+
+def close_connection(db_path: Path | str | None = None) -> None:
+    """Explicitly close and remove a pooled connection."""
+    path = Path(db_path) if db_path else DB_PATH
+    key = f"{threading.current_thread().ident}:{path}"
+
+    with _pool_lock:
+        conn = _pool.pop(key, None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def init_db(db_path: Path | str | None = None) -> duckdb.DuckDBPyConnection:

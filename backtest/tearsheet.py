@@ -1,3 +1,5 @@
+import tempfile
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -169,7 +171,8 @@ def plot_equity_curve(
         plt.savefig(output_path, dpi=150, bbox_inches="tight")
         print(f"  Plot saved to {output_path}")
     else:
-        plt.savefig("/tmp/backtest_equity_curve.png", dpi=150, bbox_inches="tight")
-        print("  Plot saved to /tmp/backtest_equity_curve.png")
+        default_path = Path(tempfile.gettempdir()) / "backtest_equity_curve.png"
+        plt.savefig(str(default_path), dpi=150, bbox_inches="tight")
+        print(f"  Plot saved to {default_path}")
 
     plt.close()

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 def ingest_universe(client: Optional[HyperliquidClient] = None, db_path=None):
     """Fetch and store the current tradable universe (perps + spot)."""
     client = client or HyperliquidClient()
-    init_db(db_path).close()
+    init_db(db_path)
     conn = get_connection(db_path)
 
     # Perps
@@ -38,7 +38,6 @@ def ingest_universe(client: Optional[HyperliquidClient] = None, db_path=None):
              float(s["dayNtlVlm"]) if s["dayNtlVlm"] else None],
         )
     logger.info(f"Ingested {len(spots)} spot pairs")
-    conn.close()
 
 
 def _parse_ts(val) -> datetime:
@@ -49,36 +48,30 @@ def _parse_ts(val) -> datetime:
 
 
 def _get_stored_range(db_path, symbol: str, interval: str) -> tuple[Optional[datetime], Optional[datetime]]:
-    """Query the first and last stored candle timestamps using a fresh connection."""
+    """Query the first and last stored candle timestamps."""
     conn = get_connection(db_path)
-    try:
-        result = conn.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM candles WHERE symbol = ? AND interval = ?",
-            [symbol, interval],
-        ).fetchone()
-        if result[0] is None:
-            return None, None
-        return _parse_ts(result[0]), _parse_ts(result[1])
-    finally:
-        conn.close()
+    result = conn.execute(
+        "SELECT MIN(timestamp), MAX(timestamp) FROM candles WHERE symbol = ? AND interval = ?",
+        [symbol, interval],
+    ).fetchone()
+    if result[0] is None:
+        return None, None
+    return _parse_ts(result[0]), _parse_ts(result[1])
 
 
 def _insert_candles(db_path, symbol: str, interval: str, candles: list[dict]):
-    """Batch-insert candles using a fresh connection."""
+    """Batch-insert candles."""
     conn = get_connection(db_path)
-    try:
-        conn.executemany(
-            """INSERT OR REPLACE INTO candles
-               (symbol, interval, timestamp, open, high, low, close, volume)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                [symbol, interval, c["timestamp"],
-                 c["open"], c["high"], c["low"], c["close"], c["volume"]]
-                for c in candles
-            ],
-        )
-    finally:
-        conn.close()
+    conn.executemany(
+        """INSERT OR REPLACE INTO candles
+           (symbol, interval, timestamp, open, high, low, close, volume)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        [
+            [symbol, interval, c["timestamp"],
+             c["open"], c["high"], c["low"], c["close"], c["volume"]]
+            for c in candles
+        ],
+    )
 
 
 def ingest_candles(
@@ -91,8 +84,7 @@ def ingest_candles(
 ):
     """Fetch and store candle data for given symbols and intervals."""
     client = client or HyperliquidClient()
-    # Ensure tables exist
-    init_db(db_path).close()
+    init_db(db_path)
     intervals = intervals or DEFAULT_INTERVALS
 
     if end_date is None:
@@ -140,7 +132,7 @@ def ingest_funding(
 ):
     """Fetch and store funding rate history for perp symbols."""
     client = client or HyperliquidClient()
-    init_db(db_path).close()
+    init_db(db_path)
 
     if end_date is None:
         end_date = datetime.now(timezone.utc)
@@ -154,13 +146,10 @@ def ingest_funding(
             continue
 
         conn = get_connection(db_path)
-        try:
-            conn.executemany(
-                """INSERT OR REPLACE INTO funding_rates (symbol, timestamp, rate, premium)
-                   VALUES (?, ?, ?, ?)""",
-                [[symbol, r["timestamp"], r["rate"], r["premium"]] for r in rates],
-            )
-        finally:
-            conn.close()
+        conn.executemany(
+            """INSERT OR REPLACE INTO funding_rates (symbol, timestamp, rate, premium)
+               VALUES (?, ?, ?, ?)""",
+            [[symbol, r["timestamp"], r["rate"], r["premium"]] for r in rates],
+        )
 
         logger.info(f"{symbol}: ingested {len(rates)} funding records")

@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 from data.client import HyperliquidClient
-from data.ingest import ingest_candles, ingest_funding, ingest_universe
+from data.ingest import ingest_candles, ingest_universe
 from data.schema import init_db
 
 logging.basicConfig(
@@ -85,26 +85,6 @@ def main():
             sys.exit(1)
 
     logger.info(f"Collection complete. {len(symbols) - len(errors)}/{len(symbols)} symbols succeeded.")
-
-    # Collect funding rates for carry strategy support
-    logger.info("Collecting funding rate data...")
-    funding_errors = []
-    for symbol in symbols:
-        try:
-            ingest_funding(
-                symbols=[symbol],
-                start_date=start_date,
-                end_date=end_date,
-                client=client,
-            )
-        except Exception as e:
-            logger.error(f"Failed to collect funding for {symbol}: {e}")
-            funding_errors.append(symbol)
-
-    logger.info(
-        f"Funding collection complete. "
-        f"{len(symbols) - len(funding_errors)}/{len(symbols)} symbols succeeded."
-    )
 
 
 if __name__ == "__main__":
