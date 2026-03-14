@@ -1,0 +1,108 @@
+name: Run Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: "Strategy name (e.g., crypto-momentum, crypto-mean-reversion)"
+        required: true
+        default: "crypto-momentum"
+      symbols:
+        description: "Override symbols (comma-separated, blank = use strategy default)"
+        required: false
+        default: ""
+      start_date:
+        description: "Start date (YYYY-MM-DD, blank = earliest available)"
+        required: false
+        default: ""
+      end_date:
+        description: "End date (YYYY-MM-DD, blank = latest available)"
+        required: false
+        default: ""
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run backtest
+        run: |
+          python -c "
+          import os, sys
+          sys.path.insert(0, '.')
+
+          from scripts.run_backtest import load_strategy
+          from backtest.engine import run_backtest
+
+          strategy_name = '${{ github.event.inputs.strategy }}'
+          symbols_input = '${{ github.event.inputs.symbols }}'.strip()
+          start_date = '${{ github.event.inputs.start_date }}'.strip() or None
+          end_date = '${{ github.event.inputs.end_date }}'.strip() or None
+
+          strategy = load_strategy(strategy_name)
+
+          if symbols_input:
+              strategy.SYMBOLS = [s.strip() for s in symbols_input.split(',')]
+
+          resolved = strategy._resolve_symbols()
+          print(f'Strategy: {strategy.CODE}')
+          print(f'Symbols ({len(resolved)}): {resolved}')
+          print(f'Period: {start_date or \"earliest\"} to {end_date or \"latest\"}')
+          print()
+
+          results = run_backtest(
+              strategy,
+              start_date=start_date,
+              end_date=end_date,
+              plot=True,
+              output_path='backtest_result.png',
+          )
+
+          metrics = results['metrics']
+          if metrics:
+              summary = f'''## Backtest Results: {strategy.CODE}
+          **Symbols ({len(resolved)})**: {', '.join(resolved)}
+          **Period**: {start_date or 'earliest'} to {end_date or 'latest'}
+
+          | Metric | Value |
+          |--------|-------|
+          | Total Return | {metrics['total_return']:.2%} |
+          | CAGR | {metrics['cagr']:.2%} |
+          | Sharpe Ratio | {metrics['sharpe']:.2f} |
+          | Sortino Ratio | {metrics['sortino']:.2f} |
+          | Max Drawdown | {metrics['max_drawdown']:.2%} |
+          | Calmar Ratio | {metrics['calmar']:.2f} |
+          | Ann. Volatility | {metrics['ann_volatility']:.2%} |
+          | Win Rate | {metrics['win_rate']:.2%} |
+          | Profit Factor | {metrics['profit_factor']:.2f} |
+          | Periods | {metrics['n_periods']} |
+          | Duration (yrs) | {metrics['n_years']:.2f} |
+          '''
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                  f.write(summary)
+          "
+
+      - name: Upload equity curve
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-equity-curve
+          path: backtest_result.png
+          retention-days: 30
+        if: always()

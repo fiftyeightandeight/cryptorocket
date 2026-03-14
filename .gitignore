@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+*.duckdb.wal
+.DS_Store
+backtest_result.png

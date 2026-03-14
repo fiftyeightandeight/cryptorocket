@@ -1,0 +1,84 @@
+name: Collect Crypto Data
+
+on:
+  schedule:
+    # Hourly candles: run every hour at :05
+    - cron: "5 * * * *"
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: "Comma-separated symbols (blank = top perps by volume)"
+        required: false
+        default: ""
+      intervals:
+        description: "Comma-separated intervals"
+        required: false
+        default: "1h,1d"
+      backfill_days:
+        description: "Days of history to backfill (for first run or catch-up)"
+        required: false
+        default: "7"
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Collect data
+        run: |
+          python -m scripts.gh_collect \
+            --intervals "${{ github.event.inputs.intervals || '1h,1d' }}" \
+            --backfill-days "${{ github.event.inputs.backfill_days || '7' }}" \
+            ${{ github.event.inputs.symbols && format('--symbols {0}', github.event.inputs.symbols) || '' }}
+
+      - name: Report summary
+        run: |
+          python -c "
+          import duckdb
+          conn = duckdb.connect('data/crypto.duckdb', read_only=True)
+          candle_count = conn.execute('SELECT COUNT(*) FROM candles').fetchone()[0]
+          symbol_count = conn.execute('SELECT COUNT(DISTINCT symbol) FROM candles').fetchone()[0]
+          intervals = conn.execute('SELECT DISTINCT interval FROM candles ORDER BY interval').fetchall()
+          latest = conn.execute('SELECT MAX(timestamp) FROM candles').fetchone()[0]
+          conn.close()
+
+          summary = f'''## Crypto Data Collection Summary
+          | Metric | Value |
+          |--------|-------|
+          | Total candles | {candle_count:,} |
+          | Symbols | {symbol_count} |
+          | Intervals | {', '.join(i[0] for i in intervals)} |
+          | Latest candle | {latest} |
+          '''
+
+          import os
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(summary)
+          "
+
+      - name: Commit and push database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: update crypto candle database [skip ci]"
+            git push
+          }

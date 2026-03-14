@@ -1,0 +1,7 @@
+hyperliquid-python-sdk
+eth_account
+duckdb>=1.1,<1.3
+pytz
+pandas
+numpy
+matplotlib
