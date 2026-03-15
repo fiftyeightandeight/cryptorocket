@@ -23,7 +23,6 @@ strategies/
   base.py                  CryptoMoonshot base class
   examples/
     momentum.py            Cross-sectional momentum + mean reversion
-    carry.py               Funding rate carry
     intraday.py            Session-based intraday (US / Asia / EU)
 scripts/
   backfill_data.py         One-time historical data backfill
@@ -82,3 +81,7 @@ HYPERLIQUID_TESTNET=true python -m scripts.run_live crypto-momentum
 - `eth_account` — Ethereum wallet signing
 - `duckdb` — Embedded columnar database
 - `pandas`, `numpy`, `matplotlib` — Data analysis and plotting
+
+## Acknowledgements
+
+The strategy pipeline architecture (`prices_to_signals` → `signals_to_target_weights` → `target_weights_to_positions` → `positions_to_gross_returns`) is inspired by [Moonshot](https://github.com/quantrocket-llc/moonshot), an open-source vectorized backtester by [QuantRocket LLC](https://www.quantrocket.com/), licensed under the Apache License 2.0. This project is not affiliated with or endorsed by QuantRocket LLC.

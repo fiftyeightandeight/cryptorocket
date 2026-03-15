@@ -2,6 +2,7 @@
 name = "cryptorocket"
 version = "0.1.0"
 description = "Crypto trading system for Hyperliquid DEX with Moonshot-style signal pipeline"
+license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
 dependencies = [
     "hyperliquid-python-sdk>=0.22,<1.0",
