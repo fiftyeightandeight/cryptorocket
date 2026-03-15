@@ -19,6 +19,9 @@ STRATEGIES = {
     "intraday-momentum-asia": "strategies.examples.intraday:IntradayMomentumAsia",
     "intraday-momentum-eu": "strategies.examples.intraday:IntradayMomentumEurope",
     "liquidation-cascade": "strategies.examples.liquidation_cascade:LiquidationCascadeMomentum",
+    "pullback-momentum": "strategies.examples.pullback_momentum:PullbackMomentum",
+    "pullback-momentum-aggressive": "strategies.examples.pullback_momentum:PullbackMomentumAggressive",
+    "pullback-momentum-conservative": "strategies.examples.pullback_momentum:PullbackMomentumConservative",
 }
 
 
