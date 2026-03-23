@@ -112,8 +112,13 @@ def ingest_dvol(
     start_timestamp: int = 0,
     end_timestamp: Optional[int] = None,
     resolution: str = "3600",
+    incremental: bool = False,
 ) -> int:
-    """Backfill DVOL (volatility index) candles.
+    """Fetch DVOL (volatility index) candles.
+
+    When incremental=True, only fetches candles newer than the latest
+    stored timestamp (suitable for hourly cron).  When False, fetches
+    from start_timestamp (suitable for full backfill).
 
     Paginates using the continuation token until all history is fetched.
     Returns the total number of candle rows inserted.
@@ -121,6 +126,18 @@ def ingest_dvol(
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
+
+    if incremental and start_timestamp == 0:
+        row = conn.execute(
+            "SELECT MAX(timestamp) FROM dvol WHERE currency = ?",
+            [currency],
+        ).fetchone()
+        if row and row[0] is not None:
+            last_ts = row[0]
+            if hasattr(last_ts, "timestamp"):
+                start_timestamp = int(last_ts.timestamp() * 1000)
+            else:
+                start_timestamp = int(last_ts)
 
     if end_timestamp is None:
         end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)

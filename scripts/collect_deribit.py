@@ -66,6 +66,11 @@ def main():
     db = args.db_path
 
     run_all = args.all
+    is_backfill = (
+        args.backfill_dvol or args.backfill_rv
+        or args.backfill_settlements or args.backfill_deliveries
+        or run_all
+    )
 
     if not args.skip_snapshot or run_all:
         n = ingest_options_snapshots(client, db_path=db)
@@ -74,10 +79,16 @@ def main():
     if args.backfill_dvol or run_all:
         n = ingest_dvol(client, db_path=db)
         logger.info("DVOL backfill complete: %d candles", n)
+    elif not is_backfill:
+        n = ingest_dvol(client, db_path=db, incremental=True)
+        logger.info("DVOL incremental update: %d candles", n)
 
     if args.backfill_rv or run_all:
         n = ingest_realized_volatility(client, db_path=db)
         logger.info("Realized vol backfill complete: %d records", n)
+    elif not is_backfill:
+        n = ingest_realized_volatility(client, db_path=db)
+        logger.info("Realized vol update: %d records", n)
 
     if args.backfill_settlements or run_all:
         n = ingest_settlements(client, db_path=db)

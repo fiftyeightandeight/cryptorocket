@@ -115,5 +115,6 @@ jobs:
           git add data/crypto.duckdb
           git diff --cached --quiet && echo "No changes to commit" || {
             git commit -m "data: update deribit options database [skip ci]"
+            git pull --rebase origin main
             git push
           }
