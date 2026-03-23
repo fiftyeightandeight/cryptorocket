@@ -1,9 +1,6 @@
 name: Collect Crypto Data
 
 on:
-  schedule:
-    # Hourly candles: run every hour at :05
-    - cron: "5 * * * *"
   workflow_dispatch:
     inputs:
       symbols:

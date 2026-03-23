@@ -1,9 +1,6 @@
 name: Collect Deribit Options Data
 
 on:
-  schedule:
-    # Hourly at :15 — offset from Hyperliquid job at :05
-    - cron: "15 * * * *"
   workflow_dispatch:
     inputs:
       backfill_dvol:
