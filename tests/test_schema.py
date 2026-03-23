@@ -47,5 +47,5 @@ class TestConnectionPool:
         init_db(db)
         conn = get_connection(db)
         tables = conn.execute("SHOW TABLES").fetchall()
-        assert len(tables) == 5
+        assert len(tables) == 11
         close_connection(db)

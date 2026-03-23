@@ -62,6 +62,74 @@ CREATE TABLE IF NOT EXISTS positions (
     updated_at  TIMESTAMP DEFAULT current_timestamp,
     PRIMARY KEY (strategy, symbol)
 );
+
+-- Deribit options ----------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS options_instruments (
+    instrument_name VARCHAR PRIMARY KEY,
+    underlying      VARCHAR,
+    expiry_date     DATE,
+    strike          DOUBLE,
+    option_type     VARCHAR       -- 'P' or 'C'
+);
+
+CREATE TABLE IF NOT EXISTS options_snapshots (
+    snapshot_ts     TIMESTAMP WITH TIME ZONE NOT NULL,
+    instrument_name VARCHAR NOT NULL,
+    bid_price       DOUBLE,
+    ask_price       DOUBLE,
+    mark_price      DOUBLE,
+    bid_iv          DOUBLE,
+    ask_iv          DOUBLE,
+    mark_iv         DOUBLE,
+    underlying_price DOUBLE,
+    delta           DOUBLE,
+    gamma           DOUBLE,
+    theta           DOUBLE,
+    vega            DOUBLE,
+    rho             DOUBLE,
+    open_interest   DOUBLE,
+    strike          DOUBLE,
+    expiry_date     DATE,
+    option_type     VARCHAR,
+    dte             INTEGER,
+    PRIMARY KEY (snapshot_ts, instrument_name)
+);
+
+CREATE TABLE IF NOT EXISTS dvol (
+    timestamp   TIMESTAMP WITH TIME ZONE NOT NULL,
+    currency    VARCHAR NOT NULL,
+    open        DOUBLE,
+    high        DOUBLE,
+    low         DOUBLE,
+    close       DOUBLE,
+    PRIMARY KEY (timestamp, currency)
+);
+
+CREATE TABLE IF NOT EXISTS realized_volatility (
+    timestamp   TIMESTAMP WITH TIME ZONE NOT NULL,
+    currency    VARCHAR NOT NULL,
+    volatility  DOUBLE,
+    PRIMARY KEY (timestamp, currency)
+);
+
+CREATE TABLE IF NOT EXISTS options_settlements (
+    instrument_name VARCHAR NOT NULL,
+    timestamp       TIMESTAMP WITH TIME ZONE NOT NULL,
+    settlement_type VARCHAR,
+    index_price     DOUBLE,
+    mark_price      DOUBLE,
+    delivery_price  DOUBLE,
+    session_profit_loss DOUBLE,
+    profit_loss     DOUBLE,
+    PRIMARY KEY (instrument_name, timestamp)
+);
+
+CREATE TABLE IF NOT EXISTS delivery_prices (
+    delivery_date DATE PRIMARY KEY,
+    index_name    VARCHAR,
+    delivery_price DOUBLE
+);
 """
 
 _pool: dict[str, duckdb.DuckDBPyConnection] = {}
