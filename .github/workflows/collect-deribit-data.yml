@@ -37,6 +37,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          token: ${{ secrets.DATA_BOT_TOKEN }}
           lfs: true
 
       - name: Set up Python
