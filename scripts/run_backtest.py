@@ -6,6 +6,7 @@ import importlib
 import logging
 import sys
 
+from backtest.cross_validate import cross_validate, print_cross_validation_report
 from backtest.engine import run_backtest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,11 +52,25 @@ def main():
     parser.add_argument("--plot", action="store_true", help="Generate equity curve plot")
     parser.add_argument("-o", "--output", help="Save plot to file (PNG/PDF)")
     parser.add_argument("--db-path", help="Custom database path")
+    parser.add_argument(
+        "--cross-validate",
+        action="store_true",
+        help="Run cross-validation against upstream Moonshot defaults",
+    )
     args = parser.parse_args()
 
     strategy = load_strategy(args.strategy)
     if args.db_path:
         strategy.DB_PATH = args.db_path
+
+    if args.cross_validate:
+        report = cross_validate(
+            strategy,
+            start_date=args.start_date,
+            end_date=args.end_date,
+        )
+        print_cross_validation_report(report)
+        return
 
     results = run_backtest(
         strategy,

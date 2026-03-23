@@ -69,14 +69,17 @@ class CryptoMoonshot:
     def target_weights_to_positions(
         self, target_weights: pd.DataFrame, prices: pd.DataFrame
     ) -> pd.DataFrame:
-        """Apply execution constraints to target weights.
+        """Convert target weights to simulated positions.
 
-        Default: assume instant fills (positions = target_weights).
+        Default: enter position the bar *after* weight allocation
+        (``weights.shift()``), matching upstream Moonshot.  This avoids
+        look-ahead bias when signals are derived from closing prices.
+
         If session is configured, flattens positions on the last bar
         of each session so there is no overnight carry.
         Override for limit order modeling, position size limits, etc.
         """
-        positions = target_weights.copy()
+        positions = target_weights.shift()
 
         if self._has_session:
             positions = self._flatten_at_session_end(positions)
@@ -214,8 +217,8 @@ class CryptoMoonshot:
         positions = self.target_weights_to_positions(target_weights, prices)
         gross_returns = self.positions_to_gross_returns(positions, prices)
 
-        # 3. Apply slippage
-        position_changes = positions.diff().fillna(0)
+        # 3. Apply slippage (fillna before diff to capture the first entry)
+        position_changes = positions.fillna(0).diff().fillna(0)
         slippage_cost = position_changes.abs() * (self.SLIPPAGE_BPS / 10000)
 
         # 4. Apply commissions
@@ -246,20 +249,23 @@ class CryptoMoonshot:
     ) -> pd.DataFrame:
         """Generate current order stubs for live trading.
 
+        Uses target_weights directly (not shifted positions) because the
+        shift is a backtest convention to avoid look-ahead bias — in live
+        trading we act on the latest signal immediately.
+
         Returns DataFrame with columns: Symbol, Qty, Action, Strategy
         """
         prices = self._get_prices(start_date, end_date)
         signals = self.prices_to_signals(prices)
         target_weights = self.signals_to_target_weights(signals, prices)
-        positions = self.target_weights_to_positions(target_weights, prices)
 
-        if positions.empty:
+        if target_weights.empty:
             return pd.DataFrame(columns=["Symbol", "Action", "Weight", "Strategy"])
 
-        # Get latest target position
-        latest = positions.iloc[-1]
-        # Previous position (for delta calculation)
-        prev = positions.iloc[-2] if len(positions) >= 2 else pd.Series(0, index=latest.index)
+        # Latest target allocation from the most recent signal
+        latest = target_weights.iloc[-1]
+        # Approximate held position as previous bar's target weight
+        prev = target_weights.iloc[-2] if len(target_weights) >= 2 else pd.Series(0, index=latest.index)
 
         delta = latest - prev
         delta = delta[delta.abs() > 1e-8]  # Filter noise
