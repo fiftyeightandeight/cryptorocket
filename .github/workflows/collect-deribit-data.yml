@@ -50,28 +50,86 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Collect Deribit data
+      - name: Configure git
         run: |
-          FLAGS=""
-          if [ "${{ inputs.backfill_all }}" = "true" ]; then
-            FLAGS="--all"
-          else
-            if [ "${{ inputs.backfill_dvol }}" = "true" ]; then
-              FLAGS="$FLAGS --backfill-dvol"
-            fi
-            if [ "${{ inputs.backfill_rv }}" = "true" ]; then
-              FLAGS="$FLAGS --backfill-rv"
-            fi
-            if [ "${{ inputs.backfill_settlements }}" = "true" ]; then
-              FLAGS="$FLAGS --backfill-settlements"
-            fi
-            if [ "${{ inputs.backfill_deliveries }}" = "true" ]; then
-              FLAGS="$FLAGS --backfill-deliveries"
-            fi
-          fi
-          python -m scripts.collect_deribit $FLAGS
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Snapshot options chain
+        run: python -m scripts.collect_deribit --skip-snapshot=false
+
+      - name: Checkpoint — snapshot
+        run: |
+          git fetch origin main
+          git reset --soft origin/main
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: deribit snapshot [skip ci]"
+            git push
+          }
+
+      - name: Backfill DVOL
+        if: inputs.backfill_dvol == true || inputs.backfill_all == true
+        run: python -m scripts.collect_deribit --skip-snapshot --backfill-dvol
+
+      - name: Checkpoint — DVOL
+        if: inputs.backfill_dvol == true || inputs.backfill_all == true
+        run: |
+          git fetch origin main
+          git reset --soft origin/main
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: deribit DVOL backfill [skip ci]"
+            git push
+          }
+
+      - name: Backfill realized volatility
+        if: inputs.backfill_rv == true || inputs.backfill_all == true
+        run: python -m scripts.collect_deribit --skip-snapshot --backfill-rv
+
+      - name: Checkpoint — realized vol
+        if: inputs.backfill_rv == true || inputs.backfill_all == true
+        run: |
+          git fetch origin main
+          git reset --soft origin/main
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: deribit realized vol backfill [skip ci]"
+            git push
+          }
+
+      - name: Backfill settlements
+        if: inputs.backfill_settlements == true || inputs.backfill_all == true
+        run: python -m scripts.collect_deribit --skip-snapshot --backfill-settlements
+
+      - name: Checkpoint — settlements
+        if: inputs.backfill_settlements == true || inputs.backfill_all == true
+        run: |
+          git fetch origin main
+          git reset --soft origin/main
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: deribit settlements backfill [skip ci]"
+            git push
+          }
+
+      - name: Backfill delivery prices
+        if: inputs.backfill_deliveries == true || inputs.backfill_all == true
+        run: python -m scripts.collect_deribit --skip-snapshot --backfill-deliveries
+
+      - name: Checkpoint — delivery prices
+        if: inputs.backfill_deliveries == true || inputs.backfill_all == true
+        run: |
+          git fetch origin main
+          git reset --soft origin/main
+          git add data/crypto.duckdb
+          git diff --cached --quiet && echo "No changes to commit" || {
+            git commit -m "data: deribit delivery prices backfill [skip ci]"
+            git push
+          }
 
       - name: Report summary
+        if: always()
         run: |
           python -c "
           import duckdb, os
@@ -92,6 +150,12 @@ jobs:
           settle_count = conn.execute(
               'SELECT COUNT(*) FROM options_settlements'
           ).fetchone()[0]
+          rv_count = conn.execute(
+              'SELECT COUNT(*) FROM realized_volatility'
+          ).fetchone()[0]
+          dp_count = conn.execute(
+              'SELECT COUNT(*) FROM delivery_prices'
+          ).fetchone()[0]
 
           conn.close()
 
@@ -102,21 +166,11 @@ jobs:
           | Unique instruments | {instr_count:,} |
           | Latest snapshot | {latest} |
           | DVOL candles | {dvol_count:,} |
+          | Realized vol records | {rv_count:,} |
           | Settlement records | {settle_count:,} |
+          | Delivery prices | {dp_count:,} |
           '''
 
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
               f.write(summary)
           "
-
-      - name: Commit and push database
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: update deribit options database [skip ci]"
-            git push
-          }

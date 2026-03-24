@@ -72,7 +72,7 @@ def main():
         or run_all
     )
 
-    if not args.skip_snapshot or run_all:
+    if not args.skip_snapshot:
         n = ingest_options_snapshots(client, db_path=db)
         logger.info("Snapshot complete: %d instruments", n)
 
