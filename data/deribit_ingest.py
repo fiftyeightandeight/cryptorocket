@@ -1,9 +1,11 @@
 """Deribit data ingestion — options snapshots, DVOL, realized vol, settlements.
 
 Mirrors the pattern established in data/ingest.py for Hyperliquid data.
+All DB writes use batch inserts (executemany) for performance.
 """
 
 import logging
+import math
 from datetime import datetime, date, timezone
 from typing import Optional
 
@@ -13,15 +15,32 @@ from data.schema import get_connection, init_db
 logger = logging.getLogger(__name__)
 
 
+def _bs_delta(S: float, K: float, T: float, sigma: float, option_type: str) -> float:
+    """Black-Scholes delta (r=0, no dividends).
+
+    sigma is annualized vol as a fraction (e.g. 0.55 for 55%).
+    Returns delta in [-1, 1].
+    """
+    if T <= 0 or sigma <= 0 or S <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
+    if option_type == "C":
+        return nd1
+    return nd1 - 1.0
+
+
 def ingest_options_snapshots(
     client: Optional[DeribitClient] = None,
     db_path=None,
     currency: str = "BTC",
+    detailed: bool = False,
 ) -> int:
-    """Snapshot the full live options chain: book_summary + ticker for Greeks.
+    """Snapshot the full live options chain from book_summary.
 
-    For each instrument with nonzero bid *or* ask, fetches the full ticker
-    to get bid_iv, ask_iv, and Greeks.  Returns the number of rows inserted.
+    By default (detailed=False), uses only get_book_summary (1 API call)
+    and computes delta from Black-Scholes.  With detailed=True, also
+    calls get_ticker per instrument to get bid_iv, ask_iv, and full Greeks.
     """
     client = client or DeribitClient()
     init_db(db_path)
@@ -29,7 +48,9 @@ def ingest_options_snapshots(
 
     summaries = client.get_book_summary(currency=currency, kind="option")
     now_ts = datetime.now(timezone.utc)
-    rows_inserted = 0
+
+    snapshot_rows = []
+    instrument_rows = []
 
     for s in summaries:
         name = s["instrument_name"]
@@ -48,61 +69,61 @@ def ingest_options_snapshots(
         expiry = parsed["expiry_date"]
         dte = (expiry - now_ts.date()).days
 
+        mark_iv = s.get("mark_iv")
+        underlying_price = s.get("underlying_price")
         bid_iv = ask_iv = None
-        greeks = {}
-        try:
-            ticker = client.get_ticker(name)
-            bid_iv = ticker.get("bid_iv")
-            ask_iv = ticker.get("ask_iv")
-            greeks = ticker.get("greeks", {}) or {}
-        except Exception as exc:
-            logger.warning("Ticker failed for %s: %s", name, exc)
+        delta = gamma = theta = vega = rho = None
 
-        conn.execute(
+        if mark_iv and underlying_price and dte > 0:
+            sigma = mark_iv / 100.0
+            T = dte / 365.0
+            delta = _bs_delta(underlying_price, parsed["strike"], T, sigma, parsed["option_type"])
+
+        if detailed:
+            try:
+                ticker = client.get_ticker(name)
+                bid_iv = ticker.get("bid_iv")
+                ask_iv = ticker.get("ask_iv")
+                greeks = ticker.get("greeks", {}) or {}
+                delta = greeks.get("delta", delta)
+                gamma = greeks.get("gamma")
+                theta = greeks.get("theta")
+                vega = greeks.get("vega")
+                rho = greeks.get("rho")
+            except Exception as exc:
+                logger.warning("Ticker failed for %s: %s", name, exc)
+
+        snapshot_rows.append([
+            now_ts, name, bid, ask,
+            s.get("mark_price"), bid_iv, ask_iv, mark_iv, underlying_price,
+            delta, gamma, theta, vega, rho,
+            s.get("open_interest"),
+            parsed["strike"], expiry, parsed["option_type"], dte,
+        ])
+        instrument_rows.append([
+            name, parsed["underlying"], expiry,
+            parsed["strike"], parsed["option_type"],
+        ])
+
+    if snapshot_rows:
+        conn.executemany(
             """INSERT OR REPLACE INTO options_snapshots
                (snapshot_ts, instrument_name, bid_price, ask_price,
                 mark_price, bid_iv, ask_iv, mark_iv, underlying_price,
                 delta, gamma, theta, vega, rho, open_interest,
                 strike, expiry_date, option_type, dte)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                now_ts,
-                name,
-                bid,
-                ask,
-                s.get("mark_price"),
-                bid_iv,
-                ask_iv,
-                s.get("mark_iv"),
-                s.get("underlying_price"),
-                greeks.get("delta"),
-                greeks.get("gamma"),
-                greeks.get("theta"),
-                greeks.get("vega"),
-                greeks.get("rho"),
-                s.get("open_interest"),
-                parsed["strike"],
-                expiry,
-                parsed["option_type"],
-                dte,
-            ],
+            snapshot_rows,
+        )
+        conn.executemany(
+            """INSERT OR REPLACE INTO options_instruments
+               (instrument_name, underlying, expiry_date, strike, option_type)
+               VALUES (?, ?, ?, ?, ?)""",
+            instrument_rows,
         )
 
-        _upsert_instrument(conn, name, parsed)
-        rows_inserted += 1
-
-    logger.info("Ingested %d options snapshots for %s", rows_inserted, currency)
-    return rows_inserted
-
-
-def _upsert_instrument(conn, name: str, parsed: dict):
-    conn.execute(
-        """INSERT OR REPLACE INTO options_instruments
-           (instrument_name, underlying, expiry_date, strike, option_type)
-           VALUES (?, ?, ?, ?, ?)""",
-        [name, parsed["underlying"], parsed["expiry_date"],
-         parsed["strike"], parsed["option_type"]],
-    )
+    logger.info("Ingested %d options snapshots for %s", len(snapshot_rows), currency)
+    return len(snapshot_rows)
 
 
 def ingest_dvol(
@@ -119,9 +140,6 @@ def ingest_dvol(
     When incremental=True, only fetches candles newer than the latest
     stored timestamp (suitable for hourly cron).  When False, fetches
     from start_timestamp (suitable for full backfill).
-
-    Paginates using the continuation token until all history is fetched.
-    Returns the total number of candle rows inserted.
     """
     client = client or DeribitClient()
     init_db(db_path)
@@ -156,15 +174,18 @@ def ingest_dvol(
         if not candles:
             break
 
+        rows = []
         for c in candles:
             ts_ms, o, h, l, close = c[0], c[1], c[2], c[3], c[4]
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-            conn.execute(
-                """INSERT OR REPLACE INTO dvol
-                   (timestamp, currency, open, high, low, close)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                [ts, currency, o, h, l, close],
-            )
+            rows.append([ts, currency, o, h, l, close])
+
+        conn.executemany(
+            """INSERT OR REPLACE INTO dvol
+               (timestamp, currency, open, high, low, close)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
         total += len(candles)
 
         continuation = result.get("continuation")
@@ -181,11 +202,7 @@ def ingest_realized_volatility(
     db_path=None,
     currency: str = "BTC",
 ) -> int:
-    """Fetch the full realized volatility history.
-
-    Returns list of [timestamp_ms, vol] pairs from Deribit; each is
-    inserted/updated.  Returns number of rows inserted.
-    """
+    """Fetch the full realized volatility history."""
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
@@ -195,15 +212,18 @@ def ingest_realized_volatility(
         logger.info("No realized volatility data returned for %s", currency)
         return 0
 
+    rows = []
     for pair in data:
         ts_ms, vol = pair[0], pair[1]
         ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-        conn.execute(
-            """INSERT OR REPLACE INTO realized_volatility
-               (timestamp, currency, volatility)
-               VALUES (?, ?, ?)""",
-            [ts, currency, vol],
-        )
+        rows.append([ts, currency, vol])
+
+    conn.executemany(
+        """INSERT OR REPLACE INTO realized_volatility
+           (timestamp, currency, volatility)
+           VALUES (?, ?, ?)""",
+        rows,
+    )
 
     logger.info("Ingested %d realized vol records for %s", len(data), currency)
     return len(data)
@@ -215,10 +235,7 @@ def ingest_settlements(
     currency: str = "BTC",
     settlement_type: str = "delivery",
 ) -> int:
-    """Paginate through all settlement/delivery events.
-
-    Returns total number of settlement rows inserted.
-    """
+    """Paginate through all settlement/delivery events."""
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
@@ -236,35 +253,44 @@ def ingest_settlements(
         if not settlements:
             break
 
+        settle_rows = []
+        instrument_rows = []
         for s in settlements:
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-            conn.execute(
-                """INSERT OR REPLACE INTO options_settlements
-                   (instrument_name, timestamp, settlement_type,
-                    index_price, mark_price, delivery_price,
-                    session_profit_loss, profit_loss)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [
-                    name,
-                    ts,
-                    s.get("type"),
-                    s.get("index_price"),
-                    s.get("mark_price"),
-                    s.get("delivery"),
-                    s.get("session_profit_loss"),
-                    s.get("profit_loss"),
-                ],
-            )
-
+            settle_rows.append([
+                name, ts, s.get("type"),
+                s.get("index_price"), s.get("mark_price"), s.get("delivery"),
+                s.get("session_profit_loss"), s.get("profit_loss"),
+            ])
             try:
                 parsed = parse_instrument_name(name)
-                _upsert_instrument(conn, name, parsed)
+                instrument_rows.append([
+                    name, parsed["underlying"], parsed["expiry_date"],
+                    parsed["strike"], parsed["option_type"],
+                ])
             except ValueError:
                 pass
 
+        conn.executemany(
+            """INSERT OR REPLACE INTO options_settlements
+               (instrument_name, timestamp, settlement_type,
+                index_price, mark_price, delivery_price,
+                session_profit_loss, profit_loss)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            settle_rows,
+        )
+        if instrument_rows:
+            conn.executemany(
+                """INSERT OR REPLACE INTO options_instruments
+                   (instrument_name, underlying, expiry_date, strike, option_type)
+                   VALUES (?, ?, ?, ?, ?)""",
+                instrument_rows,
+            )
+
         total += len(settlements)
+        logger.info("Settlements progress: %d records so far", total)
         continuation = result.get("continuation")
         if not continuation:
             break
@@ -295,6 +321,7 @@ def ingest_delivery_prices(
         if not data:
             break
 
+        rows = []
         for row in data:
             d = row.get("date")
             if isinstance(d, str):
@@ -305,13 +332,14 @@ def ingest_delivery_prices(
                 ).date()
             else:
                 delivery_date = d
+            rows.append([delivery_date, index_name, row.get("delivery_price")])
 
-            conn.execute(
-                """INSERT OR REPLACE INTO delivery_prices
-                   (delivery_date, index_name, delivery_price)
-                   VALUES (?, ?, ?)""",
-                [delivery_date, index_name, row.get("delivery_price")],
-            )
+        conn.executemany(
+            """INSERT OR REPLACE INTO delivery_prices
+               (delivery_date, index_name, delivery_price)
+               VALUES (?, ?, ?)""",
+            rows,
+        )
         total += len(data)
         records_total = result.get("records_total", 0)
         offset += len(data)
