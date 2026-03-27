@@ -41,16 +41,28 @@ def main():
         help="Backfill DVOL candles (hourly resolution, full history)",
     )
     parser.add_argument(
+        "--dvol-pages", type=int, default=None,
+        help="Max API pages per DVOL backfill run (default: unlimited)",
+    )
+    parser.add_argument(
         "--backfill-rv", action="store_true",
         help="Backfill realized volatility history",
     )
     parser.add_argument(
         "--backfill-settlements", action="store_true",
-        help="Backfill all option settlement/delivery records",
+        help="Backfill option settlement/delivery records (incremental)",
+    )
+    parser.add_argument(
+        "--settlement-pages", type=int, default=50,
+        help="Max API pages per settlements backfill run (default: 50)",
     )
     parser.add_argument(
         "--backfill-deliveries", action="store_true",
-        help="Backfill delivery prices by expiry date",
+        help="Backfill delivery prices by expiry date (incremental)",
+    )
+    parser.add_argument(
+        "--delivery-pages", type=int, default=50,
+        help="Max API pages per delivery prices backfill run (default: 50)",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -77,25 +89,33 @@ def main():
         logger.info("Snapshot complete: %d instruments", n)
 
     if args.backfill_dvol or run_all:
-        n = ingest_dvol(client, db_path=db)
+        n = ingest_dvol(client, db_path=db, max_pages=args.dvol_pages)
         logger.info("DVOL backfill complete: %d candles", n)
     elif not is_backfill:
         n = ingest_dvol(client, db_path=db, incremental=True)
         logger.info("DVOL incremental update: %d candles", n)
 
     if args.backfill_rv or run_all:
-        n = ingest_realized_volatility(client, db_path=db)
+        n = ingest_realized_volatility(client, db_path=db, incremental=True)
         logger.info("Realized vol backfill complete: %d records", n)
     elif not is_backfill:
-        n = ingest_realized_volatility(client, db_path=db)
+        n = ingest_realized_volatility(client, db_path=db, incremental=True)
         logger.info("Realized vol update: %d records", n)
 
     if args.backfill_settlements or run_all:
-        n = ingest_settlements(client, db_path=db)
+        n = ingest_settlements(
+            client, db_path=db,
+            max_pages=args.settlement_pages,
+            incremental=True,
+        )
         logger.info("Settlements backfill complete: %d records", n)
 
     if args.backfill_deliveries or run_all:
-        n = ingest_delivery_prices(client, db_path=db)
+        n = ingest_delivery_prices(
+            client, db_path=db,
+            max_pages=args.delivery_pages,
+            incremental=True,
+        )
         logger.info("Delivery prices backfill complete: %d records", n)
 
     logger.info("Deribit collection done.")

@@ -134,12 +134,14 @@ def ingest_dvol(
     end_timestamp: Optional[int] = None,
     resolution: str = "3600",
     incremental: bool = False,
+    max_pages: Optional[int] = None,
 ) -> int:
     """Fetch DVOL (volatility index) candles.
 
     When incremental=True, only fetches candles newer than the latest
     stored timestamp (suitable for hourly cron).  When False, fetches
-    from start_timestamp (suitable for full backfill).
+    from start_timestamp (suitable for full backfill).  max_pages caps
+    the number of API pages per invocation.
     """
     client = client or DeribitClient()
     init_db(db_path)
@@ -161,6 +163,7 @@ def ingest_dvol(
         end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     total = 0
+    pages = 0
     current_end = end_timestamp
 
     while True:
@@ -187,6 +190,11 @@ def ingest_dvol(
             rows,
         )
         total += len(candles)
+        pages += 1
+
+        if max_pages and pages >= max_pages:
+            logger.info("DVOL reached page cap (%d), will resume next run", max_pages)
+            break
 
         continuation = result.get("continuation")
         if not continuation or continuation >= current_end:
@@ -201,11 +209,28 @@ def ingest_realized_volatility(
     client: Optional[DeribitClient] = None,
     db_path=None,
     currency: str = "BTC",
+    incremental: bool = False,
 ) -> int:
-    """Fetch the full realized volatility history."""
+    """Fetch realized volatility history.
+
+    The Deribit API returns a fixed sliding window (~20 days) with no
+    pagination or date-range params.  When incremental=True, only new
+    timestamps not already in the DB are written, so the table grows
+    as the window slides forward across runs.
+    """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
+
+    existing_ms: set = set()
+    if incremental:
+        stored = conn.execute(
+            "SELECT timestamp FROM realized_volatility WHERE currency = ?",
+            [currency],
+        ).fetchall()
+        for r in stored:
+            ts = r[0]
+            existing_ms.add(int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts))
 
     data = client.get_historical_volatility(currency=currency)
     if not data:
@@ -215,18 +240,21 @@ def ingest_realized_volatility(
     rows = []
     for pair in data:
         ts_ms, vol = pair[0], pair[1]
+        if incremental and int(ts_ms) in existing_ms:
+            continue
         ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
         rows.append([ts, currency, vol])
 
-    conn.executemany(
-        """INSERT OR REPLACE INTO realized_volatility
-           (timestamp, currency, volatility)
-           VALUES (?, ?, ?)""",
-        rows,
-    )
+    if rows:
+        conn.executemany(
+            """INSERT OR REPLACE INTO realized_volatility
+               (timestamp, currency, volatility)
+               VALUES (?, ?, ?)""",
+            rows,
+        )
 
-    logger.info("Ingested %d realized vol records for %s", len(data), currency)
-    return len(data)
+    logger.info("Ingested %d new realized vol records for %s", len(rows), currency)
+    return len(rows)
 
 
 def ingest_settlements(
@@ -234,14 +262,33 @@ def ingest_settlements(
     db_path=None,
     currency: str = "BTC",
     settlement_type: str = "delivery",
+    max_pages: Optional[int] = None,
+    incremental: bool = False,
 ) -> int:
-    """Paginate through all settlement/delivery events."""
+    """Paginate through settlement/delivery events.
+
+    When incremental=True, stops when reaching timestamps already stored
+    in the DB (the API returns newest-first).  max_pages caps the number
+    of API pages fetched per invocation so the workflow can checkpoint
+    and resume across runs.
+    """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
 
+    newest_stored_ms: Optional[int] = None
+    if incremental:
+        row = conn.execute(
+            "SELECT MAX(timestamp) FROM options_settlements"
+        ).fetchone()
+        if row and row[0] is not None:
+            ts = row[0]
+            newest_stored_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
+
     total = 0
+    pages = 0
     continuation = None
+    hit_existing = False
 
     while True:
         result = client.get_settlements(
@@ -258,6 +305,11 @@ def ingest_settlements(
         for s in settlements:
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
+
+            if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
+                hit_existing = True
+                continue
+
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             settle_rows.append([
                 name, ts, s.get("type"),
@@ -273,14 +325,15 @@ def ingest_settlements(
             except ValueError:
                 pass
 
-        conn.executemany(
-            """INSERT OR REPLACE INTO options_settlements
-               (instrument_name, timestamp, settlement_type,
-                index_price, mark_price, delivery_price,
-                session_profit_loss, profit_loss)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            settle_rows,
-        )
+        if settle_rows:
+            conn.executemany(
+                """INSERT OR REPLACE INTO options_settlements
+                   (instrument_name, timestamp, settlement_type,
+                    index_price, mark_price, delivery_price,
+                    session_profit_loss, profit_loss)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                settle_rows,
+            )
         if instrument_rows:
             conn.executemany(
                 """INSERT OR REPLACE INTO options_instruments
@@ -289,8 +342,17 @@ def ingest_settlements(
                 instrument_rows,
             )
 
-        total += len(settlements)
-        logger.info("Settlements progress: %d records so far", total)
+        total += len(settle_rows)
+        pages += 1
+        logger.info("Settlements progress: %d new records (%d pages)", total, pages)
+
+        if hit_existing:
+            logger.info("Reached already-stored records, stopping incremental backfill")
+            break
+        if max_pages and pages >= max_pages:
+            logger.info("Reached page cap (%d), will resume next run", max_pages)
+            break
+
         continuation = result.get("continuation")
         if not continuation:
             break
@@ -304,13 +366,28 @@ def ingest_delivery_prices(
     client: Optional[DeribitClient] = None,
     db_path=None,
     index_name: str = "btc_usd",
+    max_pages: Optional[int] = None,
+    incremental: bool = False,
 ) -> int:
-    """Fetch all delivery (settlement) prices and store them."""
+    """Fetch delivery (settlement) prices and store them.
+
+    When incremental=True, skips dates already in the DB.
+    max_pages caps the number of API pages per invocation.
+    """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
 
+    existing_dates: set = set()
+    if incremental:
+        rows = conn.execute(
+            "SELECT delivery_date FROM delivery_prices WHERE index_name = ?",
+            [index_name],
+        ).fetchall()
+        existing_dates = {r[0] for r in rows}
+
     total = 0
+    pages = 0
     offset = 0
 
     while True:
@@ -332,17 +409,26 @@ def ingest_delivery_prices(
                 ).date()
             else:
                 delivery_date = d
+
+            if incremental and delivery_date in existing_dates:
+                continue
             rows.append([delivery_date, index_name, row.get("delivery_price")])
 
-        conn.executemany(
-            """INSERT OR REPLACE INTO delivery_prices
-               (delivery_date, index_name, delivery_price)
-               VALUES (?, ?, ?)""",
-            rows,
-        )
-        total += len(data)
+        if rows:
+            conn.executemany(
+                """INSERT OR REPLACE INTO delivery_prices
+                   (delivery_date, index_name, delivery_price)
+                   VALUES (?, ?, ?)""",
+                rows,
+            )
+        total += len(rows)
+        pages += 1
         records_total = result.get("records_total", 0)
         offset += len(data)
+
+        if max_pages and pages >= max_pages:
+            logger.info("Reached page cap (%d), will resume next run", max_pages)
+            break
         if offset >= records_total:
             break
 

@@ -11,14 +11,6 @@ on:
         description: "Backfill realized volatility"
         type: boolean
         default: false
-      backfill_settlements:
-        description: "Backfill option settlements"
-        type: boolean
-        default: false
-      backfill_deliveries:
-        description: "Backfill delivery prices"
-        type: boolean
-        default: false
       backfill_all:
         description: "Run snapshot + all backfills"
         type: boolean
@@ -98,33 +90,29 @@ jobs:
             git push
           }
 
-      - name: Backfill settlements
-        if: inputs.backfill_settlements == true || inputs.backfill_all == true
+      - name: Incremental settlements backfill
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-settlements
 
       - name: Checkpoint — settlements
-        if: inputs.backfill_settlements == true || inputs.backfill_all == true
         run: |
           git fetch origin main
           git reset --soft origin/main
           git add data/crypto.duckdb
           git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit settlements backfill [skip ci]"
+            git commit -m "data: deribit settlements [skip ci]"
             git push
           }
 
-      - name: Backfill delivery prices
-        if: inputs.backfill_deliveries == true || inputs.backfill_all == true
+      - name: Incremental delivery prices backfill
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-deliveries
 
       - name: Checkpoint — delivery prices
-        if: inputs.backfill_deliveries == true || inputs.backfill_all == true
         run: |
           git fetch origin main
           git reset --soft origin/main
           git add data/crypto.duckdb
           git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit delivery prices backfill [skip ci]"
+            git commit -m "data: deribit delivery prices [skip ci]"
             git push
           }
 
