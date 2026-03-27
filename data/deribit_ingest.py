@@ -333,10 +333,13 @@ def ingest_settlements(
     saved_continuation = _get_backfill_state(conn, task_key) if incremental else None
 
     search_start_ts: Optional[int] = None
+    backfilling_old = False
     if saved_continuation:
-        logger.info("Resuming backfill from saved cursor")
+        logger.info("Resuming deep backfill from saved cursor")
+        backfilling_old = True
     elif oldest_stored_ms:
         search_start_ts = oldest_stored_ms
+        backfilling_old = True
         logger.info(
             "No saved cursor — using search_start_timestamp=%d to skip overlap",
             oldest_stored_ms,
@@ -369,9 +372,14 @@ def ingest_settlements(
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
 
-            if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
-                skipped += 1
-                continue
+            if backfilling_old:
+                if incremental and oldest_stored_ms and ts_ms >= oldest_stored_ms:
+                    skipped += 1
+                    continue
+            else:
+                if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
+                    skipped += 1
+                    continue
 
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             settle_rows.append([
