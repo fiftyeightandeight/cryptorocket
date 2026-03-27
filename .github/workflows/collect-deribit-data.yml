@@ -55,9 +55,6 @@ jobs:
         if: inputs.backfill_rv == true || inputs.backfill_all == true
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-rv
 
-      - name: Reset stale backfill cursor (one-time migration)
-        run: python -c "import duckdb; c = duckdb.connect('data/crypto.duckdb'); c.execute(\"DELETE FROM backfill_state WHERE task_name LIKE 'settlements%'\"); c.close()" 2>/dev/null || true
-
       - name: Incremental settlements backfill
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-settlements
 

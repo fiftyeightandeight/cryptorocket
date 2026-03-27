@@ -259,34 +259,23 @@ def ingest_realized_volatility(
 
 def _get_backfill_state(conn, task_name: str) -> Optional[str]:
     """Load a saved continuation token for a backfill task."""
-    all_rows = conn.execute("SELECT task_name, continuation FROM backfill_state").fetchall()
-    logger.info("backfill_state contents: %s", all_rows)
     row = conn.execute(
         "SELECT continuation FROM backfill_state WHERE task_name = ?",
         [task_name],
     ).fetchone()
-    token = row[0] if row else None
-    logger.info("Loaded backfill cursor for %s: %s", task_name, token)
-    return token
+    return row[0] if row else None
 
 
 def _save_backfill_state(conn, task_name: str, continuation: Optional[str]) -> None:
     """Persist (or clear) the continuation token for a backfill task."""
     if continuation is None:
         conn.execute("DELETE FROM backfill_state WHERE task_name = ?", [task_name])
-        logger.info("Cleared backfill cursor for %s", task_name)
     else:
         conn.execute(
             """INSERT OR REPLACE INTO backfill_state (task_name, continuation, updated_at)
                VALUES (?, ?, current_timestamp)""",
             [task_name, str(continuation)],
         )
-        logger.info("Saved backfill cursor for %s: %s", task_name, continuation)
-        verify = conn.execute(
-            "SELECT continuation FROM backfill_state WHERE task_name = ?",
-            [task_name],
-        ).fetchone()
-        logger.info("Verify saved cursor for %s: %s", task_name, verify)
 
 
 def ingest_settlements(
