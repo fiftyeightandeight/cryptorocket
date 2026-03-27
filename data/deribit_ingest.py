@@ -257,6 +257,27 @@ def ingest_realized_volatility(
     return len(rows)
 
 
+def _get_backfill_state(conn, task_name: str) -> Optional[str]:
+    """Load a saved continuation token for a backfill task."""
+    row = conn.execute(
+        "SELECT continuation FROM backfill_state WHERE task_name = ?",
+        [task_name],
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _save_backfill_state(conn, task_name: str, continuation: Optional[str]) -> None:
+    """Persist (or clear) the continuation token for a backfill task."""
+    if continuation is None:
+        conn.execute("DELETE FROM backfill_state WHERE task_name = ?", [task_name])
+    else:
+        conn.execute(
+            """INSERT OR REPLACE INTO backfill_state (task_name, continuation, updated_at)
+               VALUES (?, ?, current_timestamp)""",
+            [task_name, str(continuation)],
+        )
+
+
 def ingest_settlements(
     client: Optional[DeribitClient] = None,
     db_path=None,
@@ -267,31 +288,35 @@ def ingest_settlements(
 ) -> int:
     """Paginate through settlement/delivery events.
 
-    The API returns newest-first.  When incremental=True, records that
-    already exist in the DB are skipped (not re-inserted) but pagination
-    continues past them so that older, not-yet-fetched records are
-    eventually reached.  max_pages caps the number of API pages per
-    invocation so the workflow can checkpoint and resume across runs.
+    The API returns newest-first.  The continuation token is persisted
+    in the backfill_state table so each run resumes exactly where the
+    last one stopped — no re-scanning of already-fetched pages.
+
+    New records (newer than what's stored) are picked up on page 1.
+    Once page 1 overlaps with stored data, we jump to the saved
+    continuation to keep backfilling older records.
     """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
+    task_key = f"settlements_{currency}_{settlement_type}"
 
-    stored_range: tuple[Optional[int], Optional[int]] = (None, None)
+    newest_stored_ms: Optional[int] = None
     if incremental:
         row = conn.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM options_settlements"
+            "SELECT MAX(timestamp) FROM options_settlements"
         ).fetchone()
-        if row and row[0] is not None and row[1] is not None:
-            to_ms = lambda t: int(t.timestamp() * 1000) if hasattr(t, "timestamp") else int(t)
-            stored_range = (to_ms(row[0]), to_ms(row[1]))
+        if row and row[0] is not None:
+            ts = row[0]
+            newest_stored_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
 
-    oldest_stored_ms, newest_stored_ms = stored_range
+    saved_continuation = _get_backfill_state(conn, task_key) if incremental else None
 
     total = 0
     skipped = 0
     pages = 0
-    continuation = None
+    continuation = saved_continuation
+    backfill_done = False
 
     while True:
         result = client.get_settlements(
@@ -301,6 +326,7 @@ def ingest_settlements(
         )
         settlements = result.get("settlements", [])
         if not settlements:
+            backfill_done = True
             break
 
         settle_rows = []
@@ -309,10 +335,9 @@ def ingest_settlements(
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
 
-            if incremental and oldest_stored_ms and newest_stored_ms:
-                if oldest_stored_ms <= ts_ms <= newest_stored_ms:
-                    skipped += 1
-                    continue
+            if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
+                skipped += 1
+                continue
 
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             settle_rows.append([
@@ -349,17 +374,24 @@ def ingest_settlements(
         total += len(settle_rows)
         pages += 1
         logger.info(
-            "Settlements progress: %d new records, %d skipped (%d pages)",
+            "Settlements progress: %d new, %d skipped (%d pages)",
             total, skipped, pages,
         )
 
-        if max_pages and pages >= max_pages:
-            logger.info("Reached page cap (%d), will resume next run", max_pages)
-            break
-
         continuation = result.get("continuation")
         if not continuation:
+            backfill_done = True
             break
+
+        if max_pages and pages >= max_pages:
+            logger.info("Reached page cap (%d), saving cursor for next run", max_pages)
+            break
+
+    if backfill_done:
+        _save_backfill_state(conn, task_key, None)
+        logger.info("Settlements backfill complete — all pages fetched")
+    else:
+        _save_backfill_state(conn, task_key, continuation)
 
     logger.info("Ingested %d %s settlement records for %s (skipped %d existing)",
                 total, settlement_type, currency, skipped)

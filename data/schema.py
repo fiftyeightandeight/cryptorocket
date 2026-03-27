@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS delivery_prices (
     index_name    VARCHAR,
     delivery_price DOUBLE
 );
+
+CREATE TABLE IF NOT EXISTS backfill_state (
+    task_name    VARCHAR PRIMARY KEY,
+    continuation VARCHAR,
+    updated_at   TIMESTAMP DEFAULT current_timestamp
+);
 """
 
 _pool: dict[str, duckdb.DuckDBPyConnection] = {}
