@@ -289,20 +289,14 @@ def ingest_settlements(
     """Paginate through settlement/delivery events.
 
     The API returns newest-first.  When incremental=True and we already
-    have data, we use two strategies:
-
-    1. If a saved continuation token exists, resume deep backfill from
-       where the last run stopped.
-    2. Otherwise, use search_start_timestamp set to our oldest stored
-       record to skip the entire overlap zone in one shot, jumping
-       straight to the backfill frontier.
-
-    This avoids wasting pages re-scanning records we already have.
+    have data, we always use search_start_timestamp set to our oldest
+    stored record to jump straight to the backfill frontier.  The
+    continuation token is only used for paging within a single run
+    (not persisted across runs) since each run shifts the frontier.
     """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
-    task_key = f"settlements_{currency}_{settlement_type}"
 
     oldest_stored_ms: Optional[int] = None
     newest_stored_ms: Optional[int] = None
@@ -319,25 +313,17 @@ def ingest_settlements(
                 else:
                     newest_stored_ms = ms
 
-    saved_continuation = _get_backfill_state(conn, task_key) if incremental else None
-
-    search_start_ts: Optional[int] = None
-    backfilling_old = False
-    if saved_continuation:
-        logger.info("Resuming deep backfill from saved cursor")
-        backfilling_old = True
-    elif oldest_stored_ms:
-        search_start_ts = oldest_stored_ms
-        backfilling_old = True
+    backfilling_old = bool(oldest_stored_ms)
+    if backfilling_old:
         logger.info(
-            "No saved cursor — using search_start_timestamp=%d to skip overlap",
+            "Using search_start_timestamp=%d to jump to backfill frontier",
             oldest_stored_ms,
         )
 
     total = 0
     skipped = 0
     pages = 0
-    continuation = saved_continuation
+    continuation = None
     backfill_done = False
 
     while True:
@@ -346,8 +332,8 @@ def ingest_settlements(
             "settlement_type": settlement_type,
             "continuation": continuation,
         }
-        if search_start_ts and pages == 0 and not continuation:
-            kwargs["search_start_timestamp"] = search_start_ts
+        if backfilling_old and pages == 0:
+            kwargs["search_start_timestamp"] = oldest_stored_ms
 
         result = client.get_settlements(**kwargs)
         settlements = result.get("settlements", [])
@@ -415,14 +401,11 @@ def ingest_settlements(
             break
 
         if max_pages and pages >= max_pages:
-            logger.info("Reached page cap (%d), saving cursor for next run", max_pages)
+            logger.info("Reached page cap (%d), will continue next run", max_pages)
             break
 
     if backfill_done:
-        _save_backfill_state(conn, task_key, None)
         logger.info("Settlements backfill complete — all pages fetched")
-    else:
-        _save_backfill_state(conn, task_key, continuation)
 
     logger.info("Ingested %d %s settlement records for %s (skipped %d existing)",
                 total, settlement_type, currency, skipped)
