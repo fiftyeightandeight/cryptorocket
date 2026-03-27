@@ -54,8 +54,8 @@ def main():
         help="Backfill option settlement/delivery records (incremental)",
     )
     parser.add_argument(
-        "--settlement-pages", type=int, default=50,
-        help="Max API pages per settlements backfill run (default: 50)",
+        "--settlement-pages", type=int, default=None,
+        help="Max API pages per settlements backfill run (default: unlimited)",
     )
     parser.add_argument(
         "--backfill-deliveries", action="store_true",

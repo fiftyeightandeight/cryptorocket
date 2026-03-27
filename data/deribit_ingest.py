@@ -286,76 +286,56 @@ def ingest_settlements(
     max_pages: Optional[int] = None,
     incremental: bool = False,
 ) -> int:
-    """Paginate through settlement/delivery events.
+    """Paginate through settlement/delivery events (newest-first).
 
-    The API returns newest-first.  When incremental=True and we already
-    have data, we always use search_start_timestamp set to our oldest
-    stored record to jump straight to the backfill frontier.  The
-    continuation token is only used for paging within a single run
-    (not persisted across runs) since each run shifts the frontier.
+    When incremental=True, loads existing primary keys into a set and
+    skips records already in the DB.  Stops early if an entire page
+    consists of duplicates (meaning we've reached fully-stored history).
+    max_pages provides a safety cap per run.
     """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
 
-    oldest_stored_ms: Optional[int] = None
-    newest_stored_ms: Optional[int] = None
+    existing_keys: set = set()
     if incremental:
-        row = conn.execute(
-            "SELECT MIN(timestamp), MAX(timestamp) FROM options_settlements"
-        ).fetchone()
-        if row and row[0] is not None:
-            for i, attr in enumerate(["oldest", "newest"]):
-                ts = row[i]
-                ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
-                if attr == "oldest":
-                    oldest_stored_ms = ms
-                else:
-                    newest_stored_ms = ms
-
-    backfilling_old = bool(oldest_stored_ms)
-    if backfilling_old:
-        logger.info(
-            "Using search_start_timestamp=%d to jump to backfill frontier",
-            oldest_stored_ms,
-        )
+        rows = conn.execute(
+            "SELECT instrument_name, timestamp FROM options_settlements"
+        ).fetchall()
+        for r in rows:
+            ts = r[1]
+            ts_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
+            existing_keys.add((r[0], ts_ms))
+        logger.info("Loaded %d existing settlement keys", len(existing_keys))
 
     total = 0
     skipped = 0
     pages = 0
+    consecutive_dup_pages = 0
     continuation = None
-    backfill_done = False
 
     while True:
-        kwargs: dict = {
-            "currency": currency,
-            "settlement_type": settlement_type,
-            "continuation": continuation,
-        }
-        if backfilling_old and pages == 0:
-            kwargs["search_start_timestamp"] = oldest_stored_ms
-
-        result = client.get_settlements(**kwargs)
+        result = client.get_settlements(
+            currency=currency,
+            settlement_type=settlement_type,
+            continuation=continuation,
+        )
         settlements = result.get("settlements", [])
         if not settlements:
-            backfill_done = True
             break
 
         settle_rows = []
         instrument_rows = []
+        page_new = 0
         for s in settlements:
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
 
-            if backfilling_old:
-                if incremental and oldest_stored_ms and ts_ms >= oldest_stored_ms:
-                    skipped += 1
-                    continue
-            else:
-                if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
-                    skipped += 1
-                    continue
+            if incremental and (name, ts_ms) in existing_keys:
+                skipped += 1
+                continue
 
+            page_new += 1
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             settle_rows.append([
                 name, ts, s.get("type"),
@@ -390,22 +370,33 @@ def ingest_settlements(
 
         total += len(settle_rows)
         pages += 1
-        logger.info(
-            "Settlements progress: %d new, %d skipped (%d pages)",
-            total, skipped, pages,
-        )
+
+        if page_new == 0:
+            consecutive_dup_pages += 1
+        else:
+            consecutive_dup_pages = 0
+
+        if pages % 10 == 0 or page_new > 0:
+            logger.info(
+                "Settlements progress: %d new, %d skipped (%d pages)",
+                total, skipped, pages,
+            )
 
         continuation = result.get("continuation")
         if not continuation:
-            backfill_done = True
+            logger.info("Settlements backfill complete — all %d pages fetched", pages)
+            break
+
+        if incremental and consecutive_dup_pages >= 5:
+            logger.info(
+                "5 consecutive duplicate pages — stored history fully covered (%d pages)",
+                pages,
+            )
             break
 
         if max_pages and pages >= max_pages:
             logger.info("Reached page cap (%d), will continue next run", max_pages)
             break
-
-    if backfill_done:
-        logger.info("Settlements backfill complete — all pages fetched")
 
     logger.info("Ingested %d %s settlement records for %s (skipped %d existing)",
                 total, settlement_type, currency, skipped)
