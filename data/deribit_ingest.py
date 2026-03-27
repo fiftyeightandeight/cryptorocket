@@ -267,28 +267,31 @@ def ingest_settlements(
 ) -> int:
     """Paginate through settlement/delivery events.
 
-    When incremental=True, stops when reaching timestamps already stored
-    in the DB (the API returns newest-first).  max_pages caps the number
-    of API pages fetched per invocation so the workflow can checkpoint
-    and resume across runs.
+    The API returns newest-first.  When incremental=True, records that
+    already exist in the DB are skipped (not re-inserted) but pagination
+    continues past them so that older, not-yet-fetched records are
+    eventually reached.  max_pages caps the number of API pages per
+    invocation so the workflow can checkpoint and resume across runs.
     """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
 
-    newest_stored_ms: Optional[int] = None
+    stored_range: tuple[Optional[int], Optional[int]] = (None, None)
     if incremental:
         row = conn.execute(
-            "SELECT MAX(timestamp) FROM options_settlements"
+            "SELECT MIN(timestamp), MAX(timestamp) FROM options_settlements"
         ).fetchone()
-        if row and row[0] is not None:
-            ts = row[0]
-            newest_stored_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
+        if row and row[0] is not None and row[1] is not None:
+            to_ms = lambda t: int(t.timestamp() * 1000) if hasattr(t, "timestamp") else int(t)
+            stored_range = (to_ms(row[0]), to_ms(row[1]))
+
+    oldest_stored_ms, newest_stored_ms = stored_range
 
     total = 0
+    skipped = 0
     pages = 0
     continuation = None
-    hit_existing = False
 
     while True:
         result = client.get_settlements(
@@ -306,9 +309,10 @@ def ingest_settlements(
             name = s.get("instrument_name", "")
             ts_ms = s.get("timestamp", 0)
 
-            if incremental and newest_stored_ms and ts_ms <= newest_stored_ms:
-                hit_existing = True
-                continue
+            if incremental and oldest_stored_ms and newest_stored_ms:
+                if oldest_stored_ms <= ts_ms <= newest_stored_ms:
+                    skipped += 1
+                    continue
 
             ts = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
             settle_rows.append([
@@ -344,11 +348,11 @@ def ingest_settlements(
 
         total += len(settle_rows)
         pages += 1
-        logger.info("Settlements progress: %d new records (%d pages)", total, pages)
+        logger.info(
+            "Settlements progress: %d new records, %d skipped (%d pages)",
+            total, skipped, pages,
+        )
 
-        if hit_existing:
-            logger.info("Reached already-stored records, stopping incremental backfill")
-            break
         if max_pages and pages >= max_pages:
             logger.info("Reached page cap (%d), will resume next run", max_pages)
             break
@@ -357,8 +361,8 @@ def ingest_settlements(
         if not continuation:
             break
 
-    logger.info("Ingested %d %s settlement records for %s",
-                total, settlement_type, currency)
+    logger.info("Ingested %d %s settlement records for %s (skipped %d existing)",
+                total, settlement_type, currency, skipped)
     return total
 
 
