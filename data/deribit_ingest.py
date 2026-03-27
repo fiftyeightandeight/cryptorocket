@@ -299,29 +299,48 @@ def ingest_settlements(
 ) -> int:
     """Paginate through settlement/delivery events.
 
-    The API returns newest-first.  The continuation token is persisted
-    in the backfill_state table so each run resumes exactly where the
-    last one stopped — no re-scanning of already-fetched pages.
+    The API returns newest-first.  When incremental=True and we already
+    have data, we use two strategies:
 
-    New records (newer than what's stored) are picked up on page 1.
-    Once page 1 overlaps with stored data, we jump to the saved
-    continuation to keep backfilling older records.
+    1. If a saved continuation token exists, resume deep backfill from
+       where the last run stopped.
+    2. Otherwise, use search_start_timestamp set to our oldest stored
+       record to skip the entire overlap zone in one shot, jumping
+       straight to the backfill frontier.
+
+    This avoids wasting pages re-scanning records we already have.
     """
     client = client or DeribitClient()
     init_db(db_path)
     conn = get_connection(db_path)
     task_key = f"settlements_{currency}_{settlement_type}"
 
+    oldest_stored_ms: Optional[int] = None
     newest_stored_ms: Optional[int] = None
     if incremental:
         row = conn.execute(
-            "SELECT MAX(timestamp) FROM options_settlements"
+            "SELECT MIN(timestamp), MAX(timestamp) FROM options_settlements"
         ).fetchone()
         if row and row[0] is not None:
-            ts = row[0]
-            newest_stored_ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
+            for i, attr in enumerate(["oldest", "newest"]):
+                ts = row[i]
+                ms = int(ts.timestamp() * 1000) if hasattr(ts, "timestamp") else int(ts)
+                if attr == "oldest":
+                    oldest_stored_ms = ms
+                else:
+                    newest_stored_ms = ms
 
     saved_continuation = _get_backfill_state(conn, task_key) if incremental else None
+
+    search_start_ts: Optional[int] = None
+    if saved_continuation:
+        logger.info("Resuming backfill from saved cursor")
+    elif oldest_stored_ms:
+        search_start_ts = oldest_stored_ms
+        logger.info(
+            "No saved cursor — using search_start_timestamp=%d to skip overlap",
+            oldest_stored_ms,
+        )
 
     total = 0
     skipped = 0
@@ -330,11 +349,15 @@ def ingest_settlements(
     backfill_done = False
 
     while True:
-        result = client.get_settlements(
-            currency=currency,
-            settlement_type=settlement_type,
-            continuation=continuation,
-        )
+        kwargs: dict = {
+            "currency": currency,
+            "settlement_type": settlement_type,
+            "continuation": continuation,
+        }
+        if search_start_ts and pages == 0 and not continuation:
+            kwargs["search_start_timestamp"] = search_start_ts
+
+        result = client.get_settlements(**kwargs)
         settlements = result.get("settlements", [])
         if not settlements:
             backfill_done = True

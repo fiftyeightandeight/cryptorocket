@@ -192,8 +192,14 @@ class DeribitClient:
         settlement_type: str = "delivery",
         count: int = 1000,
         continuation: Optional[str] = None,
+        search_start_timestamp: Optional[int] = None,
     ) -> dict:
         """Retrieve settlement/delivery events, paginated.
+
+        search_start_timestamp: if set, the API returns results going
+        backwards from this timestamp (ms).  Use the MIN stored timestamp
+        to skip already-fetched data and jump straight to the backfill
+        frontier.
 
         Returns dict with "settlements" list and "continuation" token.
         """
@@ -204,6 +210,8 @@ class DeribitClient:
         }
         if continuation is not None:
             params["continuation"] = continuation
+        if search_start_timestamp is not None:
+            params["search_start_timestamp"] = search_start_timestamp
         return self._call(
             "public/get_last_settlements_by_currency", params
         )
