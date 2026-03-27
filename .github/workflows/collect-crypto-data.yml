@@ -51,6 +51,9 @@ jobs:
             --backfill-days "${{ github.event.inputs.backfill_days || '7' }}" \
             ${{ github.event.inputs.symbols && format('--symbols {0}', github.event.inputs.symbols) || '' }}
 
+      - name: Checkpoint database (flush WAL to main file)
+        run: python -c "import duckdb; c = duckdb.connect('data/crypto.duckdb'); c.execute('CHECKPOINT'); c.close()"
+
       - name: Upload database to release
         run: |
           gh release upload data-latest data/crypto.duckdb --clobber 2>/dev/null || \

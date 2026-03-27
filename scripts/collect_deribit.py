@@ -21,6 +21,7 @@ from data.deribit_ingest import (
     ingest_realized_volatility,
     ingest_settlements,
 )
+from data.schema import close_connection
 
 logging.basicConfig(
     level=logging.INFO,
@@ -118,6 +119,7 @@ def main():
         )
         logger.info("Delivery prices backfill complete: %d records", n)
 
+    close_connection(db)
     logger.info("Deribit collection done.")
 
 
