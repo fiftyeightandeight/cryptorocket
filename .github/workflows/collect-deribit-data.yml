@@ -29,9 +29,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.DATA_BOT_TOKEN }}
-          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,86 +39,47 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Download database from release
+        run: gh release download data-latest -p crypto.duckdb -D data/ --clobber 2>/dev/null || echo "No existing release, starting fresh"
+        env:
+          GH_TOKEN: ${{ secrets.DATA_BOT_TOKEN }}
 
       - name: Snapshot options chain
         run: python -m scripts.collect_deribit
-
-      - name: Checkpoint — snapshot
-        run: |
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit snapshot [skip ci]"
-            git push
-          }
 
       - name: Backfill DVOL
         if: inputs.backfill_dvol == true || inputs.backfill_all == true
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-dvol
 
-      - name: Checkpoint — DVOL
-        if: inputs.backfill_dvol == true || inputs.backfill_all == true
-        run: |
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit DVOL backfill [skip ci]"
-            git push
-          }
-
       - name: Backfill realized volatility
         if: inputs.backfill_rv == true || inputs.backfill_all == true
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-rv
 
-      - name: Checkpoint — realized vol
-        if: inputs.backfill_rv == true || inputs.backfill_all == true
-        run: |
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit realized vol backfill [skip ci]"
-            git push
-          }
-
       - name: Incremental settlements backfill
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-settlements
-
-      - name: Checkpoint — settlements
-        run: |
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit settlements [skip ci]"
-            git push
-          }
 
       - name: Incremental delivery prices backfill
         run: python -m scripts.collect_deribit --skip-snapshot --backfill-deliveries
 
-      - name: Checkpoint — delivery prices
+      - name: Upload database to release
         run: |
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: deribit delivery prices [skip ci]"
-            git push
-          }
+          gh release upload data-latest data/crypto.duckdb --clobber 2>/dev/null || \
+          gh release create data-latest data/crypto.duckdb \
+            --title "Latest database" \
+            --notes "Auto-updated by collect-deribit-data workflow"
+        env:
+          GH_TOKEN: ${{ secrets.DATA_BOT_TOKEN }}
 
       - name: Report summary
         if: always()
         run: |
           python -c "
           import duckdb, os
-          conn = duckdb.connect('data/crypto.duckdb', read_only=True)
+          db = 'data/crypto.duckdb'
+          if not os.path.exists(db):
+              print('No database file found')
+              exit(0)
+          conn = duckdb.connect(db, read_only=True)
 
           snap_count = conn.execute(
               'SELECT COUNT(*) FROM options_snapshots'

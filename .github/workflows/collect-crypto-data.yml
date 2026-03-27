@@ -29,9 +29,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.DATA_BOT_TOKEN }}
-          lfs: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,8 +37,12 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Download database from release
+        run: gh release download data-latest -p crypto.duckdb -D data/ --clobber 2>/dev/null || echo "No existing release, starting fresh"
+        env:
+          GH_TOKEN: ${{ secrets.DATA_BOT_TOKEN }}
 
       - name: Collect data
         run: |
@@ -49,6 +50,15 @@ jobs:
             --intervals "${{ github.event.inputs.intervals || '1h,1d' }}" \
             --backfill-days "${{ github.event.inputs.backfill_days || '7' }}" \
             ${{ github.event.inputs.symbols && format('--symbols {0}', github.event.inputs.symbols) || '' }}
+
+      - name: Upload database to release
+        run: |
+          gh release upload data-latest data/crypto.duckdb --clobber 2>/dev/null || \
+          gh release create data-latest data/crypto.duckdb \
+            --title "Latest database" \
+            --notes "Auto-updated by data collection workflow"
+        env:
+          GH_TOKEN: ${{ secrets.DATA_BOT_TOKEN }}
 
       - name: Report summary
         run: |
@@ -74,15 +84,3 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
               f.write(summary)
           "
-
-      - name: Commit and push database
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git reset --soft origin/main
-          git add data/crypto.duckdb
-          git diff --cached --quiet && echo "No changes to commit" || {
-            git commit -m "data: update crypto candle database [skip ci]"
-            git push
-          }
