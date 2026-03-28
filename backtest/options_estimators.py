@@ -2,7 +2,7 @@
 
 These estimators learn the *structure* of spreads and IV premiums from
 accumulated snapshot data and produce point estimates suitable for augmenting
-the Phase 1 (settlement-based) short-put backtest with realistic entry pricing.
+the Phase 1 (settlement-based) short-option backtest with realistic entry pricing.
 
 Both estimators use a bucket-based approach:
   - |delta| buckets: [0, 0.10), [0.10, 0.25), [0.25, 0.40), [0.40, 0.50]
@@ -11,6 +11,11 @@ Both estimators use a bucket-based approach:
 
 For each bucket, the median of observed values is stored.  At estimation time,
 the matching bucket is looked up; if empty, a global median fallback is used.
+
+SpreadEstimator: spread expressed as fraction of mid IV, so it scales with
+    the volatility regime.
+IVPremiumEstimator: IV premium expressed as a ratio of realized vol
+    (multiplicative), so the premium scales proportionally with RV.
 """
 
 import json
@@ -51,9 +56,13 @@ def _bucket_key(delta_abs: float, dte: float, dvol: float) -> str:
 
 
 class SpreadEstimator:
-    """Estimates bid/ask spread as a fraction of mark price.
+    """Estimates bid/ask spread as a fraction of mid implied volatility.
 
-    spread_pct = (ask - bid) / mark_price
+    spread_iv_pct = (ask_iv - bid_iv) / mark_iv
+
+    At estimation time, returns the IV-relative spread ratio.  To obtain
+    the bid IV for a sold option: bid_iv = mark_iv * (1 - spread_iv_pct / 2).
+    This causes the dollar spread to widen/tighten naturally with the IV regime.
     """
 
     def __init__(self):
@@ -62,14 +71,14 @@ class SpreadEstimator:
         self._n_samples: int = 0
 
     def fit(self, db_path=None) -> "SpreadEstimator":
-        """Calibrate from options_snapshots + dvol data."""
+        """Calibrate from options_snapshots IV data + dvol."""
         conn = get_connection(db_path)
 
         df = conn.execute("""
             SELECT
-                s.bid_price,
-                s.ask_price,
-                s.mark_price,
+                s.bid_iv,
+                s.ask_iv,
+                s.mark_iv,
                 ABS(s.delta) AS delta_abs,
                 s.dte,
                 d.close AS dvol
@@ -83,36 +92,35 @@ class SpreadEstimator:
                       AND d2.timestamp <= s.snapshot_ts
                 )
             )
-            WHERE s.bid_price IS NOT NULL
-              AND s.ask_price IS NOT NULL
-              AND s.mark_price > 0
-              AND s.bid_price > 0
-              AND s.ask_price > 0
+            WHERE s.bid_iv > 0
+              AND s.ask_iv > 0
+              AND s.mark_iv > 0
         """).fetchdf()
 
         if df.empty:
-            logger.warning("No snapshot data available for SpreadEstimator.fit()")
+            logger.warning("No IV data available for SpreadEstimator.fit()")
             return self
 
-        df["spread_pct"] = (df["ask_price"] - df["bid_price"]) / df["mark_price"]
-        df = df[df["spread_pct"] > 0]
+        df["spread_iv_pct"] = (df["ask_iv"] - df["bid_iv"]) / df["mark_iv"]
+        df = df[df["spread_iv_pct"] > 0]
 
         if "dvol" not in df.columns or df["dvol"].isna().all():
-            df["dvol"] = 50.0  # neutral fallback when DVOL not yet collected
-
+            df["dvol"] = 50.0
         df["dvol"] = df["dvol"].fillna(50.0)
+
         df["key"] = df.apply(
             lambda r: _bucket_key(r["delta_abs"], r["dte"], r["dvol"]),
             axis=1,
         )
 
-        medians = df.groupby("key")["spread_pct"].median()
+        medians = df.groupby("key")["spread_iv_pct"].median()
         self._buckets = medians.to_dict()
-        self._global_median = float(df["spread_pct"].median())
+        self._global_median = float(df["spread_iv_pct"].median())
         self._n_samples = len(df)
 
         logger.info(
-            "SpreadEstimator fitted: %d buckets from %d samples, global median=%.4f",
+            "SpreadEstimator fitted: %d buckets from %d samples, "
+            "global median=%.4f (IV-relative)",
             len(self._buckets), self._n_samples, self._global_median,
         )
         return self
@@ -120,7 +128,7 @@ class SpreadEstimator:
     def estimate(
         self, delta: float, dte: float, dvol: float = 50.0
     ) -> float:
-        """Return estimated spread_pct for the given option parameters."""
+        """Return estimated spread as a fraction of mid IV."""
         key = _bucket_key(abs(delta), dte, dvol)
         return self._buckets.get(key, self._global_median)
 
@@ -146,16 +154,19 @@ class SpreadEstimator:
 
 
 class IVPremiumEstimator:
-    """Estimates implied volatility to use in Black-Scholes pricing.
+    """Estimates implied volatility as a multiple of realized volatility.
 
-    Learns the typical premium of mark_iv over realized vol, bucketed by
-    delta, DTE, and DVOL regime.  At estimation time, returns
-    sigma_implied = realized_vol + iv_premium_bucket.
+    Learns the typical ratio mark_iv / realized_vol, bucketed by delta,
+    DTE, and DVOL regime.  At estimation time, returns
+    sigma_implied = realized_vol * iv_ratio_bucket.
+
+    This multiplicative form ensures the IV premium scales proportionally
+    with RV rather than being a fixed additive constant.
     """
 
     def __init__(self):
         self._buckets: dict[str, float] = {}
-        self._global_median: float = 0.0
+        self._global_median: float = 1.0
         self._n_samples: int = 0
 
     def fit(self, db_path=None) -> "IVPremiumEstimator":
@@ -197,30 +208,36 @@ class IVPremiumEstimator:
             return self
 
         if "realized_vol" not in df.columns or df["realized_vol"].isna().all():
-            logger.warning("No realized vol data; IV premium will equal mark_iv")
-            df["realized_vol"] = 0.0
+            logger.warning("No realized vol data; IV ratio defaults to 1.0")
+            self._global_median = 1.0
+            return self
 
         df["realized_vol"] = df["realized_vol"].fillna(0.0)
+        df = df[df["realized_vol"] > 5.0]
+
+        if df.empty:
+            logger.warning("No rows with realized_vol > 5%%; IV ratio defaults to 1.0")
+            return self
 
         if "dvol" not in df.columns or df["dvol"].isna().all():
             df["dvol"] = 50.0
         df["dvol"] = df["dvol"].fillna(50.0)
 
-        # iv_premium = mark_iv - realized_vol (both in annualized % terms)
-        df["iv_premium"] = df["mark_iv"] - df["realized_vol"]
+        df["iv_ratio"] = df["mark_iv"] / df["realized_vol"]
 
         df["key"] = df.apply(
             lambda r: _bucket_key(r["delta_abs"], r["dte"], r["dvol"]),
             axis=1,
         )
 
-        medians = df.groupby("key")["iv_premium"].median()
+        medians = df.groupby("key")["iv_ratio"].median()
         self._buckets = medians.to_dict()
-        self._global_median = float(df["iv_premium"].median())
+        self._global_median = float(df["iv_ratio"].median())
         self._n_samples = len(df)
 
         logger.info(
-            "IVPremiumEstimator fitted: %d buckets from %d samples, global median=%.2f%%",
+            "IVPremiumEstimator fitted: %d buckets from %d samples, "
+            "global median ratio=%.2fx",
             len(self._buckets), self._n_samples, self._global_median,
         )
         return self
@@ -234,11 +251,14 @@ class IVPremiumEstimator:
     ) -> float:
         """Return estimated implied volatility (annualized %).
 
-        sigma_implied = realized_vol + iv_premium(bucket)
+        sigma_implied = realized_vol * iv_ratio(bucket)
+        Falls back to dvol if realized_vol is too small.
         """
+        if realized_vol <= 5.0:
+            return dvol
         key = _bucket_key(abs(delta), dte, dvol)
-        premium = self._buckets.get(key, self._global_median)
-        return realized_vol + premium
+        ratio = self._buckets.get(key, self._global_median)
+        return realized_vol * ratio
 
     def save(self, path: str | Path) -> None:
         path = Path(path)

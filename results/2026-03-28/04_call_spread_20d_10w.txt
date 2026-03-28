@@ -1,0 +1,77 @@
+
+================================================================================
+  SHORT CALL SPREAD (10% wide) — TRADE SUMMARY
+================================================================================
+
+  Total trades:     38
+  Winners:          30 (78.9%)
+  Losers:           8 (21.1%)
+  Date range:       2021-03-30 to 2026-03-27
+
+  --- P&L Summary (per trade, 1 BTC notional) ---
+  Mean P&L:         $-98
+  Median P&L:       $410
+  Total P&L:        $-3,740
+  Best trade:       $1,417
+  Worst trade:      $-6,697
+
+  --- Strike / Premium ---
+  Avg short strike: $67,461
+  Avg long strike:  $73,618
+  Avg width:        $6,158
+  Avg short prem:   $1,068
+  Avg long prem:    $543
+  Avg net premium:  $525
+  Avg delta:        0.189
+  Avg DTE:          45 days
+  Avg sigma:        61.5%
+  Avg bid sigma:    60.8%
+  Avg RV:           53.5%
+  Avg spread(IV):   0.023
+
+  --- Yearly Breakdown ---
+  2021:   5 trades, 4/5 wins (80%), P&L $       +40
+  2022:   8 trades, 8/8 wins (100%), P&L $    +2,886
+  2023:   7 trades, 4/7 wins (57%), P&L $    -4,273
+  2024:   8 trades, 5/8 wins (62%), P&L $    -8,215
+  2025:   8 trades, 7/8 wins (88%), P&L $    +4,002
+  2026:   2 trades, 2/2 wins (100%), P&L $    +1,820
+
+  --- Losing Trades ---
+  2024-11-18: K=85,000/94,000, delivery=91,722, P&L=$-6,697
+  2025-05-26: K=105,500/116,000, delivery=110,039, P&L=$-4,021
+  2023-11-17: K=30,000/33,000, delivery=36,265, P&L=$-2,719
+  2023-03-30: K=26,000/28,500, delivery=28,707, P&L=$-2,335
+  2024-03-31: K=68,000/75,000, delivery=70,272, P&L=$-2,177
+  2021-08-23: K=48,000/53,000, delivery=50,136, P&L=$-1,764
+  2024-02-15: K=49,750/54,500, delivery=51,902, P&L=$-1,714
+  2023-02-13: K=21,500/23,000, delivery=21,869, P&L=$-367
+
+============================================================
+  Strategy: ShortCallSprd-20d-10w
+============================================================
+  Total Return:        -16.61%
+  CAGR:                 -3.80%
+  Ann. Volatility:       8.02%
+  Sharpe Ratio:          -0.47
+  Sortino Ratio:         -0.46
+  Max Drawdown:        -25.65%
+  Calmar Ratio:          -0.15
+  Win Rate:             78.95%
+  Profit Factor:          0.60
+  Avg Win:             0.8392%
+  Avg Loss:           -5.2200%
+  Periods:                  38
+  Duration (yrs):         4.68
+============================================================
+
+  Monthly Returns:
+       Jan   Feb   Mar   Apr   May   Jun   Jul   Aug   Sep   Oct   Nov   Dec   Year
+Year                                                                               
+2021   NaN   NaN   NaN   NaN  0.64   NaN  0.49 -3.68   NaN  0.75  0.74   NaN  -1.13
+2022  0.77   NaN  0.99  0.50   NaN  1.38   NaN  0.73  0.94   NaN  0.90  0.93   7.37
+2023   NaN -1.70 -8.98   NaN  0.91   NaN  0.88  1.14   NaN  0.44 -9.06   NaN -15.87
+2024  0.94 -3.45 -3.20   NaN  0.62   NaN  0.62  0.80   NaN  0.48 -7.88   NaN -10.88
+2025  0.97  1.11   NaN  0.98 -3.81   NaN  0.89  1.00   NaN  0.66  1.09   NaN   2.81
+2026  0.95   NaN  0.95   NaN   NaN   NaN   NaN   NaN   NaN   NaN   NaN   NaN   1.91
+

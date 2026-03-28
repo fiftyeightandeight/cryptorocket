@@ -1,0 +1,72 @@
+
+================================================================================
+  SHORT PUT (naked) — TRADE SUMMARY
+================================================================================
+
+  Total trades:     40
+  Winners:          33 (82.5%)
+  Losers:           7 (17.5%)
+  Date range:       2021-03-24 to 2026-02-26
+
+  --- P&L Summary (per trade, 1 BTC notional) ---
+  Mean P&L:         $2,207
+  Median P&L:       $1,954
+  Total P&L:        $88,299
+  Best trade:       $17,724
+  Worst trade:      $-10,973
+
+  --- Strike / Premium ---
+  Avg short strike: $51,156
+  Avg net premium:  $3,070
+  Avg delta:        -0.326
+  Avg DTE:          45 days
+  Avg sigma:        61.7%
+  Avg bid sigma:    60.8%
+  Avg RV:           53.4%
+  Avg spread(IV):   0.030
+
+  --- Yearly Breakdown ---
+  2021:   6 trades, 4/6 wins (67%), P&L $   +16,843
+  2022:   8 trades, 6/8 wins (75%), P&L $       +97
+  2023:   8 trades, 7/8 wins (88%), P&L $   +12,453
+  2024:   8 trades, 8/8 wins (100%), P&L $   +37,043
+  2025:   8 trades, 7/8 wins (88%), P&L $   +23,713
+  2026:   2 trades, 1/2 wins (50%), P&L $    -1,850
+
+  --- Losing Trades ---
+  2022-06-17: K=33,000, delivery=21,079, P&L=$-10,973
+  2026-02-26: K=74,000, delivery=68,010, P&L=$-5,921
+  2025-11-28: K=98,000, delivery=91,091, P&L=$-4,775
+  2021-06-22: K=38,000, delivery=32,713, P&L=$-4,475
+  2023-09-10: K=27,500, delivery=25,855, P&L=$-1,291
+  2022-12-14: K=19,000, delivery=17,796, P&L=$-803
+  2021-12-19: K=49,000, delivery=47,627, P&L=$-634
+
+============================================================
+  Strategy: ShortPut-20d
+============================================================
+  Total Return:        324.02%
+  CAGR:                 34.04%
+  Ann. Volatility:      26.02%
+  Sharpe Ratio:           1.31
+  Sortino Ratio:          1.10
+  Max Drawdown:        -33.25%
+  Calmar Ratio:           1.02
+  Win Rate:             82.50%
+  Profit Factor:          3.42
+  Avg Win:             7.0574%
+  Avg Loss:           -9.7306%
+  Periods:                  40
+  Duration (yrs):         4.93
+============================================================
+
+  Monthly Returns:
+        Jan   Feb    Mar   Apr   May    Jun   Jul    Aug    Sep    Oct    Nov    Dec   Year
+Year                                                                                       
+2021    NaN   NaN    NaN   NaN  9.63 -11.78   NaN   6.16  10.98    NaN  20.99  -1.29  36.09
+2022    NaN  6.11   6.24   NaN  8.47 -33.25   NaN  14.63   3.78   2.90    NaN  -4.23  -4.30
+2023  14.43   NaN   2.59  5.06   NaN   1.50  5.33    NaN  -4.69   7.88    NaN  14.00  54.56
+2024   1.99   NaN  10.23  2.89   NaN   5.31  2.24    NaN   3.19  10.38    NaN  20.61  71.09
+2025   2.27   NaN   2.44  3.55   NaN  13.54  4.83   2.20    NaN   1.68  -4.87    NaN  27.65
+2026   4.85 -8.00    NaN   NaN   NaN    NaN   NaN    NaN    NaN    NaN    NaN    NaN  -3.54
+
